@@ -402,6 +402,9 @@ def main():
                 'mean': np.mean(pos_list),
                 'std': np.std(pos_list, ddof=1) if len(pos_list) > 1 else 0,
                 'var': np.var(pos_list, ddof=1) if len(pos_list) > 1 else 0,
+                'min': float(min(pos_list)),
+                'max': float(max(pos_list)),
+                'unique': len(set(pos_list))
             }
         
         stats_df = pd.DataFrame(stats).T
@@ -437,6 +440,24 @@ def main():
             ax.grid(axis='x', alpha=0.3)
             plt.tight_layout()
             st.pyplot(fig)
+        
+        # Display statistics table
+        st.subheader("Job Position Statistics")
+        
+        # Format the dataframe for display
+        display_df = stats_df.copy()
+        display_df.index.name = 'Job'
+        display_df = display_df.reset_index()
+        
+        # Round numerical columns for better display
+        display_df['mean'] = display_df['mean'].apply(lambda x: f"{x:.2f}")
+        display_df['std'] = display_df['std'].apply(lambda x: f"{x:.2f}")
+        display_df['var'] = display_df['var'].apply(lambda x: f"{x:.2f}")
+        display_df['min'] = display_df['min'].apply(lambda x: f"{x:.1f}")
+        display_df['max'] = display_df['max'].apply(lambda x: f"{x:.1f}")
+        display_df['unique'] = display_df['unique'].apply(lambda x: f"{x:.1f}")
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
         
         # K-means clustering
         st.subheader("Step 3: K-means Clustering - Hierarchy Levels")
