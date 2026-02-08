@@ -1,4 +1,4 @@
-# 🚀 快速启动指南
+# Quick Start Guide
 
 ## 方法 1：使用启动脚本（推荐）
 
@@ -55,23 +55,23 @@ streamlit run mvr_website.py
 
 ### 主页面（结果展示）
 
-点击 **🚀 Run Analysis** 后会显示：
+点击 **Run Analysis** 后会显示：
 
-#### 1️⃣ MVR: Finding Optimal Rankings
+#### Step 1: MVR - Finding Optimal Rankings
 - 进度条显示运行状态
 - Convergence图：显示发现optimal rankings的过程
 - Coverage指标：找到的rankings占理论最大值的比例
 
-#### 2️⃣ Job Position Variance
+#### Step 2: Job Position Variance
 - 左图：每个职位的平均排名（带误差棒）
 - 右图：每个职位的位置方差（红色=高方差，绿色=低方差）
 
-#### 3️⃣ K-means Clustering
+#### Step 3: K-means Clustering
 - 显示选定方法的Q(K)或Inertia曲线
 - 红色虚线：阈值
 - 绿色虚线：选定的K值
 
-#### 4️⃣ Job Cluster Visualization
+#### Step 4: Job Cluster Visualization
 - 散点图：显示每个职位分配到哪一层
 - 可展开查看详细的层级分配
 
@@ -158,11 +158,11 @@ pip3 install matplotlib --upgrade
 
 ## 下一步建议
 
-1. ✅ **本地测试**：先在本地运行，确保一切正常
-2. ✅ **调整参数**：尝试不同的R、T和K-means方法
-3. ✅ **截图保存**：将结果图表截图，用于论文
-4. ✅ **云端部署**：部署到Streamlit Cloud，获得公开URL
-5. ✅ **论文引用**：在论文中引用这个交互式工具的URL
+1. **本地测试**：先在本地运行，确保一切正常
+2. **调整参数**：尝试不同的R、T和K-means方法
+3. **截图保存**：将结果图表截图，用于论文
+4. **云端部署**：部署到Streamlit Cloud，获得公开URL
+5. **论文引用**：在论文中引用这个交互式工具的URL
 
 ---
 
