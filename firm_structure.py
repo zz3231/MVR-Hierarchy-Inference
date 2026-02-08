@@ -175,6 +175,7 @@ class WorkerGenerator:
         trajectories = []
         worker_id = 1
         depts = [d for d in self.firm.roles.keys() if d != 'Executive']
+        ceo_sources = set()  # Track which roles can promote to CEO
         
         for _ in range(self.n_workers):
             dept = random.choice(depts)
@@ -193,17 +194,44 @@ class WorkerGenerator:
                 promo_prob = self.promo_config.probs[current_role]
                 if random.random() < promo_prob:
                     next_rank = current_rank + 1
+                    # Check if promotion is within department
                     if next_rank > len(dept_roles):
+                        # At top of department, can only promote to CEO
+                        ceo_sources.add(current_role)  # Record this transition
                         current_role = 'CEO'
                         current_rank = self.firm.roles['Executive'][0][1]
                         dept = 'Executive'
                     else:
+                        # Promote within department
                         for role_name, rank in dept_roles:
                             if rank == next_rank:
                                 current_role = role_name
                                 current_rank = rank
                                 break
             worker_id += 1
+        
+        df = pd.DataFrame(trajectories)
+        
+        # Ensure at least one worker from each department top reaches CEO
+        # This guarantees CEO is properly constrained in the ranking
+        for dept in depts:
+            dept_roles = self.firm.roles[dept]
+            top_role = dept_roles[-1][0]  # e.g., Sales_L6
+            
+            if top_role not in ceo_sources:
+                # Add a synthetic CEO promotion from this top role
+                # Find a worker currently at this top role
+                top_role_workers = df[df['role'] == top_role]['worker_id'].unique()
+                if len(top_role_workers) > 0:
+                    lucky_worker = top_role_workers[0]
+                    max_year = df['year'].max()
+                    trajectories.append({
+                        'worker_id': lucky_worker,
+                        'year': max_year + 1,
+                        'department': 'Executive',
+                        'role': 'CEO',
+                        'rank': self.firm.roles['Executive'][0][1]
+                    })
         
         return pd.DataFrame(trajectories)
     
