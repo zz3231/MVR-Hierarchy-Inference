@@ -58,7 +58,7 @@ if page == "Company Builder":
             dept_col1, dept_col2 = st.columns([2, 1])
             with dept_col1:
                 dept_name = st.text_input(f"Dept {i+1} Name", 
-                                         value=["Law", "Engineering", "Sales", "Finance", "Marketing", "HR"][i],
+                                         value=["Sales", "Engineering", "Finance", "Law", "Marketing", "HR"][i],
                                          key=f"dept_name_{i}")
             with dept_col2:
                 n_ranks = st.number_input(f"Ranks", 1, 10, 5, key=f"dept_ranks_{i}")
