@@ -77,7 +77,7 @@ if page == "Company Builder":
     
     col1, col2 = st.columns(2)
     with col1:
-        n_workers = st.number_input("Total Workers", 100, 2000, 500, 50)
+        n_workers = st.number_input("Total Workers", 100, 2000, 1000, 50)
         default_promo_rate = st.slider("Default Promotion Rate", 0.0, 0.5, 0.20, 0.05)
     with col2:
         start_year = st.number_input("Start Year", 2000, 2020, 2016)
@@ -409,6 +409,48 @@ elif page == "MVR Analysis":
             st.success("Algorithm correctly identified the same number of layers despite selection bias.")
         else:
             st.warning(f"Algorithm identified different layer counts: GT={K_gt}, Biased={K_bias}")
+        
+        # Ranking Comparison Visualization
+        st.markdown("**Job Ranking Comparison**")
+        
+        # Get positions for both companies
+        positions_gt = result_gt['positions']
+        positions_bias = result_bias['positions']
+        
+        # Calculate average ranks
+        jobs_gt = sorted(positions_gt.keys(), key=lambda x: np.mean(positions_gt[x]))
+        jobs_bias = sorted(positions_bias.keys(), key=lambda x: np.mean(positions_bias[x]))
+        
+        # Create side-by-side ranking plots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        # Ground Truth ranking
+        means_gt = [np.mean(positions_gt[j]) for j in jobs_gt]
+        stds_gt = [np.std(positions_gt[j], ddof=1) if len(positions_gt[j]) > 1 else 0 for j in jobs_gt]
+        
+        ax1.barh(range(len(jobs_gt)), means_gt, xerr=stds_gt, capsize=5, alpha=0.7, color='steelblue')
+        ax1.set_yticks(range(len(jobs_gt)))
+        ax1.set_yticklabels(jobs_gt)
+        ax1.set_xlabel('Average Rank (± Std Dev)', fontsize=11)
+        ax1.set_title('Ground Truth Company Rankings', fontsize=13, fontweight='bold')
+        ax1.invert_yaxis()
+        ax1.grid(axis='x', alpha=0.3)
+        
+        # Biased company ranking
+        means_bias = [np.mean(positions_bias[j]) for j in jobs_bias]
+        stds_bias = [np.std(positions_bias[j], ddof=1) if len(positions_bias[j]) > 1 else 0 for j in jobs_bias]
+        
+        ax2.barh(range(len(jobs_bias)), means_bias, xerr=stds_bias, capsize=5, alpha=0.7, color='coral')
+        ax2.set_yticks(range(len(jobs_bias)))
+        ax2.set_yticklabels(jobs_bias)
+        ax2.set_xlabel('Average Rank (± Std Dev)', fontsize=11)
+        ax2.set_title('Biased Company Rankings', fontsize=13, fontweight='bold')
+        ax2.invert_yaxis()
+        ax2.grid(axis='x', alpha=0.3)
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
         
         # Convergence Comparison
         st.subheader("Step 1: MVR Convergence Comparison")
