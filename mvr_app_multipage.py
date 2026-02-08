@@ -98,42 +98,76 @@ if page == "Company Builder":
         st.subheader("3. Configure Observation Bias")
         
         st.markdown("""
-        Simulate LinkedIn data limitations by setting observation rates per rank.
-        Example: Lower ranks may have 50% observation rate, higher ranks 100%.
+        Set observation rate for each role individually.
+        Rate = 1.0 means 100% observed, 0.5 means 50% observed.
         """)
         
-        col1, col2 = st.columns(2)
+        # Get unique roles from ground truth
+        roles_info = st.session_state.ground_truth_df[['department', 'role', 'rank']].drop_duplicates().sort_values(['department', 'rank'])
         
+        # Create interactive table for observation rates
+        st.markdown("**Observation Rates by Role:**")
+        
+        # Group by department for better organization
+        for dept in roles_info['department'].unique():
+            if dept == 'Executive':
+                continue
+                
+            with st.expander(f"{dept} Department", expanded=True):
+                dept_roles = roles_info[roles_info['department'] == dept]
+                
+                for idx, row in dept_roles.iterrows():
+                    col1, col2, col3 = st.columns([2, 1, 2])
+                    
+                    with col1:
+                        st.write(f"**{row['role']}** (Rank {row['rank']})")
+                    
+                    with col2:
+                        # Default: lower ranks = lower observation
+                        default_rate = 0.5 if row['rank'] <= 2 else (0.7 if row['rank'] <= 4 else 1.0)
+                        rate = st.number_input(
+                            "Rate",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=default_rate,
+                            step=0.05,
+                            key=f"obs_rate_{row['role']}",
+                            label_visibility="collapsed"
+                        )
+                    
+                    with col3:
+                        st.write(f"{rate*100:.0f}% observed")
+        
+        # CEO always 100%
+        st.markdown("**Executive:**")
+        col1, col2, col3 = st.columns([2, 1, 2])
         with col1:
-            bias_type = st.radio("Bias Type", ["Layer-based", "Custom per Role"])
-            
-            if bias_type == "Layer-based":
-                st.markdown("**Observation Rate by Rank:**")
-                rates_by_rank = {}
-                max_rank = st.session_state.ground_truth_df['rank'].max()
-                for rank in range(1, int(max_rank) + 1):
-                    rate = st.slider(f"Rank {rank}", 0.0, 1.0, 
-                                    0.5 if rank <= 2 else (0.7 if rank <= 4 else 1.0),
-                                    0.05, key=f"rank_rate_{rank}")
-                    rates_by_rank[rank] = rate
-        
+            st.write("**CEO**")
         with col2:
-            if st.button("Apply Observation Bias", type="primary"):
-                bias_sim = ObservationBiasSimulator(st.session_state.ground_truth_df)
-                
-                if bias_type == "Layer-based":
-                    bias_sim.set_layer_based_rates(rates_by_rank)
-                
-                biased_df = bias_sim.apply_bias()
-                st.session_state.biased_df = biased_df
-                
-                st.success(f"Generated biased sample: {len(biased_df)} records ({len(biased_df)/len(st.session_state.ground_truth_df)*100:.1f}%)")
-                
-                comparison = bias_sim.get_comparison_table(biased_df)
-                st.markdown("**Comparison: Ground Truth vs Observed:**")
-                st.dataframe(comparison[['department', 'role', 'rank', 'ground_truth_avg', 
-                                        'observed_avg', 'observation_rate', 'actual_rate']], 
-                            use_container_width=True)
+            ceo_rate = st.number_input("Rate", 0.0, 1.0, 1.0, 0.05, 
+                                       key="obs_rate_CEO", label_visibility="collapsed")
+        with col3:
+            st.write(f"{ceo_rate*100:.0f}% observed")
+        
+        if st.button("Apply Observation Bias", type="primary"):
+            bias_sim = ObservationBiasSimulator(st.session_state.ground_truth_df)
+            
+            # Collect all rates from session state
+            for role in roles_info['role'].unique():
+                if f"obs_rate_{role}" in st.session_state:
+                    bias_sim.set_observation_rate(role, st.session_state[f"obs_rate_{role}"])
+            bias_sim.set_observation_rate("CEO", st.session_state.get("obs_rate_CEO", 1.0))
+            
+            biased_df = bias_sim.apply_bias()
+            st.session_state.biased_df = biased_df
+            
+            st.success(f"Generated biased sample: {len(biased_df)} records ({len(biased_df)/len(st.session_state.ground_truth_df)*100:.1f}%)")
+            
+            comparison = bias_sim.get_comparison_table(biased_df)
+            st.markdown("**Comparison: Ground Truth vs Observed:**")
+            st.dataframe(comparison[['department', 'role', 'rank', 'ground_truth_avg', 
+                                    'observed_avg', 'observation_rate', 'actual_rate']], 
+                        use_container_width=True)
         
         if st.session_state.biased_df is not None:
             st.info("Both companies ready. Go to 'MVR Analysis' to compare algorithm performance.")
