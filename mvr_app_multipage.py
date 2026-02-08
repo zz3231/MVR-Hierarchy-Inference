@@ -410,6 +410,63 @@ elif page == "MVR Analysis":
         else:
             st.warning(f"Algorithm identified different layer counts: GT={K_gt}, Biased={K_bias}")
         
+        # Job Cluster Visualization
+        st.markdown("**Job Cluster Visualization**")
+        
+        # Get positions and run K-means for clustering
+        positions_gt = result_gt['positions']
+        positions_bias = result_bias['positions']
+        
+        jobs_gt = sorted(positions_gt.keys(), key=lambda x: np.mean(positions_gt[x]))
+        jobs_bias = sorted(positions_bias.keys(), key=lambda x: np.mean(positions_bias[x]))
+        
+        # Run K-means to get cluster assignments
+        job_mean_ranks_gt = np.array([np.mean(positions_gt[j]) for j in jobs_gt]).reshape(-1, 1)
+        job_mean_ranks_bias = np.array([np.mean(positions_bias[j]) for j in jobs_bias]).reshape(-1, 1)
+        
+        kmeans_gt = KMeans(n_clusters=K_gt, random_state=0, n_init=10)
+        labels_gt = kmeans_gt.fit_predict(job_mean_ranks_gt)
+        
+        kmeans_bias = KMeans(n_clusters=K_bias, random_state=0, n_init=10)
+        labels_bias = kmeans_bias.fit_predict(job_mean_ranks_bias)
+        
+        # Create side-by-side cluster plots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        # Ground Truth clusters
+        for job_idx, job in enumerate(jobs_gt):
+            avg_rank = np.mean(positions_gt[job])
+            cluster = labels_gt[job_idx]
+            ax1.scatter(avg_rank, cluster, s=200, alpha=0.6, edgecolors='black', linewidths=1.5)
+            ax1.text(avg_rank, cluster, job.replace('_', '\n'), ha='center', va='center', 
+                    fontsize=7, fontweight='bold')
+        
+        ax1.set_xlabel('Average Position in Ranking', fontsize=11)
+        ax1.set_ylabel('K-means Layer', fontsize=11)
+        ax1.set_title(f'Ground Truth Company (K={K_gt})', fontsize=13, fontweight='bold')
+        ax1.set_yticks(range(K_gt))
+        ax1.set_ylim(-0.5, K_gt - 0.5)
+        ax1.grid(True, alpha=0.3)
+        
+        # Biased Company clusters
+        for job_idx, job in enumerate(jobs_bias):
+            avg_rank = np.mean(positions_bias[job])
+            cluster = labels_bias[job_idx]
+            ax2.scatter(avg_rank, cluster, s=200, alpha=0.6, edgecolors='black', linewidths=1.5)
+            ax2.text(avg_rank, cluster, job.replace('_', '\n'), ha='center', va='center', 
+                    fontsize=7, fontweight='bold')
+        
+        ax2.set_xlabel('Average Position in Ranking', fontsize=11)
+        ax2.set_ylabel('K-means Layer', fontsize=11)
+        ax2.set_title(f'Biased Company (K={K_bias})', fontsize=13, fontweight='bold')
+        ax2.set_yticks(range(K_bias))
+        ax2.set_ylim(-0.5, K_bias - 0.5)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
         # Ranking Comparison Visualization
         st.markdown("**Job Ranking Comparison**")
         
