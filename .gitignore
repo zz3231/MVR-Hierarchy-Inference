@@ -1,26 +1,32 @@
-# OS files
-.DS_Store
-.vscode/
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+venv/
+env/
+ENV/
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Documents
 *.pdf
 *.docx
 *.doc
 
-# Personal notebooks
-mvr_example_for_mike*.ipynb
-mvr_ranking_andy.ipynb
-mvr_sample_andy.ipynb
-_doc_referenced_code/
-Programing_GenAI/
-create_prototype_notebook.py
+# Logs
+*.log
+*.tmp

@@ -30,6 +30,8 @@ if 'biased_df' not in st.session_state:
     st.session_state.biased_df = None
 if 'firm_structure' not in st.session_state:
     st.session_state.firm_structure = None
+if 'mvr_results' not in st.session_state:
+    st.session_state.mvr_results = None
 
 # Page navigation
 st.sidebar.title("MVR Hierarchy Inference")
@@ -48,7 +50,7 @@ if page == "Company Builder":
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        n_departments = st.number_input("Number of Departments", 1, 6, 4)
+        n_departments = st.number_input("Number of Departments", 1, 6, 3)
         
         departments = []
         st.markdown("**Department Configuration:**")
@@ -181,10 +183,20 @@ elif page == "MVR Analysis":
         st.warning("Please generate companies in 'Company Builder' first.")
         st.stop()
     
+    if st.session_state.biased_df is None:
+        st.warning("Please apply observation bias in 'Company Builder' first.")
+        st.stop()
+    
     st.markdown("""
     Run MVR algorithm on both ground truth and biased companies.
     Compare whether the algorithm correctly identifies hierarchy levels despite selection bias.
     """)
+    
+    # Show current data status
+    st.info(f"Loaded: Ground Truth ({len(st.session_state.ground_truth_df)} records, "
+            f"{st.session_state.ground_truth_df['worker_id'].nunique()} workers) | "
+            f"Biased ({len(st.session_state.biased_df)} records, "
+            f"{st.session_state.biased_df['worker_id'].nunique()} workers)")
     
     # MVR Parameters
     st.subheader("MVR Parameters")
@@ -198,8 +210,9 @@ elif page == "MVR Analysis":
     
     # K-means method
     kmeans_method = st.selectbox("K-means Method", 
-                                 ["Bonhomme et al. (2019)", "Overall Std", 
-                                  "Elbow (Manual)", "Simple Variance"])
+                                 ["Average Optimal Ranking Variance", "Bonhomme et al. (2019)", 
+                                  "Elbow (Manual)", "Simple Variance"],
+                                 index=0)
     
     if kmeans_method == "Elbow (Manual)":
         chosen_K = st.number_input("Choose K", 1, 20, 4)
@@ -212,13 +225,19 @@ elif page == "MVR Analysis":
         for worker, group in panel_df.groupby('worker_id'):
             path = group.sort_values('year')['role'].tolist()
             
-            for i in range(len(path)):
-                for j in range(i + 1, len(path)):
-                    if path[i] != path[j]:  # Skip self-loops
-                        if H.has_edge(path[i], path[j]):
-                            H[path[i]][path[j]]['weight'] += 1
-                        else:
-                            H.add_edge(path[i], path[j], weight=1)
+            # Remove consecutive duplicates (worker stays in same role)
+            path_unique = [path[0]]
+            for role in path[1:]:
+                if role != path_unique[-1]:
+                    path_unique.append(role)
+            
+            # Create ALL PAIRS edges
+            for i in range(len(path_unique)):
+                for j in range(i + 1, len(path_unique)):
+                    if H.has_edge(path_unique[i], path_unique[j]):
+                        H[path_unique[i]][path_unique[j]]['weight'] += 1
+                    else:
+                        H.add_edge(path_unique[i], path_unique[j], weight=1)
         
         return H
     
@@ -297,6 +316,7 @@ elif page == "MVR Analysis":
         sum_var = sum(np.var(positions[j], ddof=1) if len(positions[j]) > 1 else 0 for j in jobs)
         threshold = (1 / (N - 1)) * sum_var * N
         
+        Q_values = []
         for K in range(1, N + 1):
             if K == N:
                 Q_K = 0.0
@@ -306,48 +326,75 @@ elif page == "MVR Analysis":
                 kmeans.fit(job_mean_ranks)
                 Q_K = kmeans.inertia_
             
+            Q_values.append(Q_K)
             if Q_K <= threshold:
-                return K
-        return N
+                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
+        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
+    
+    def run_kmeans_overall_std(optimal_rankings):
+        """Overall Std (Average Optimal Ranking Variance) method"""
+        positions = defaultdict(list)
+        for ranking in optimal_rankings:
+            for pos, job in enumerate(ranking):
+                positions[job].append(pos)
+        
+        jobs = sorted(positions.keys(), key=lambda x: np.mean(positions[x]))
+        N = len(jobs)
+        
+        average_ranks = {job: np.mean(positions[job]) for job in jobs}
+        rank_var = np.var(list(average_ranks.values()))
+        threshold = (1 / (N - 1)) * rank_var * N
+        
+        Q_values = []
+        for K in range(1, N + 1):
+            if K == N:
+                Q_K = 0.0
+            else:
+                kmeans = KMeans(n_clusters=K, random_state=0, n_init=10)
+                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
+                kmeans.fit(job_mean_ranks)
+                Q_K = kmeans.inertia_
+            
+            Q_values.append(Q_K)
+            if Q_K <= threshold:
+                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
+        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
     
     # Run analysis
     if st.button("Run MVR Analysis on Both Companies", type="primary"):
-        st.subheader("Results Comparison")
         
-        col1, col2 = st.columns(2)
+        # Run both companies
+        with st.spinner("Running MVR on Ground Truth Company..."):
+            H_gt = build_directed_graph_all_pairs(st.session_state.ground_truth_df)
+            opt_gt, viol_gt, prog_gt = find_optimal_rankings_mvr(H_gt, R, T, early_stop)
         
-        # Ground Truth Company
-        with col1:
-            st.markdown("**Ground Truth Company**")
-            with st.spinner("Building graph..."):
-                H_gt = build_directed_graph_all_pairs(st.session_state.ground_truth_df)
-            st.write(f"Graph: {H_gt.number_of_nodes()} nodes, {H_gt.number_of_edges()} edges")
-            
-            with st.spinner("Running MVR..."):
-                opt_gt, viol_gt, prog_gt = find_optimal_rankings_mvr(H_gt, R, T, early_stop)
-            st.write(f"Found {len(opt_gt)} optimal rankings")
-            st.write(f"Min violations: {viol_gt}")
-            
-            K_gt = run_kmeans_bonhomme(opt_gt)
-            st.metric("Identified Layers (K)", K_gt)
+        with st.spinner("Running MVR on Biased Company..."):
+            H_bias = build_directed_graph_all_pairs(st.session_state.biased_df)
+            opt_bias, viol_bias, prog_bias = find_optimal_rankings_mvr(H_bias, R, T, early_stop)
         
-        # Biased Company
-        with col2:
-            st.markdown("**Biased Company (Observed Data)**")
-            with st.spinner("Building graph..."):
-                H_bias = build_directed_graph_all_pairs(st.session_state.biased_df)
-            st.write(f"Graph: {H_bias.number_of_nodes()} nodes, {H_bias.number_of_edges()} edges")
-            
-            with st.spinner("Running MVR..."):
-                opt_bias, viol_bias, prog_bias = find_optimal_rankings_mvr(H_bias, R, T, early_stop)
-            st.write(f"Found {len(opt_bias)} optimal rankings")
-            st.write(f"Min violations: {viol_bias}")
-            
-            K_bias = run_kmeans_bonhomme(opt_bias)
-            st.metric("Identified Layers (K)", K_bias)
+        # Run K-means
+        if kmeans_method == "Average Optimal Ranking Variance":
+            result_gt = run_kmeans_overall_std(opt_gt)
+            result_bias = run_kmeans_overall_std(opt_bias)
+        else:  # Bonhomme
+            result_gt = run_kmeans_bonhomme(opt_gt)
+            result_bias = run_kmeans_bonhomme(opt_bias)
         
-        # Comparison
-        st.subheader("Algorithm Robustness Assessment")
+        K_gt = result_gt['K']
+        K_bias = result_bias['K']
+        
+        # Store results in session state for detailed view
+        st.session_state.mvr_results = {
+            'H_gt': H_gt, 'H_bias': H_bias,
+            'opt_gt': opt_gt, 'opt_bias': opt_bias,
+            'viol_gt': viol_gt, 'viol_bias': viol_bias,
+            'prog_gt': prog_gt, 'prog_bias': prog_bias,
+            'result_gt': result_gt, 'result_bias': result_bias,
+            'K_gt': K_gt, 'K_bias': K_bias
+        }
+        
+        # Display summary comparison
+        st.subheader("Summary Comparison")
         
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -356,29 +403,193 @@ elif page == "MVR Analysis":
             st.metric("Biased Data K", K_bias)
         with col3:
             diff = abs(K_gt - K_bias)
-            st.metric("Difference", diff, delta=f"{diff} layers")
+            st.metric("Difference", diff)
         
         if K_gt == K_bias:
             st.success("Algorithm correctly identified the same number of layers despite selection bias.")
         else:
             st.warning(f"Algorithm identified different layer counts: GT={K_gt}, Biased={K_bias}")
         
-        # Convergence plots
-        st.subheader("Convergence Comparison")
+        # Convergence Comparison
+        st.subheader("Step 1: MVR Convergence Comparison")
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         
         ax1.plot(range(1, len(prog_gt) + 1), prog_gt, 'b-', linewidth=2)
-        ax1.set_title('Ground Truth Company')
-        ax1.set_xlabel('Repetitions')
-        ax1.set_ylabel('Unique Rankings Found')
+        ax1.set_title('Ground Truth Company', fontweight='bold')
+        ax1.set_xlabel('Number of Repetitions')
+        ax1.set_ylabel('Unique Optimal Rankings Found')
         ax1.grid(True, alpha=0.3)
         
         ax2.plot(range(1, len(prog_bias) + 1), prog_bias, 'r-', linewidth=2)
-        ax2.set_title('Biased Company')
-        ax2.set_xlabel('Repetitions')
-        ax2.set_ylabel('Unique Rankings Found')
+        ax2.set_title('Biased Company', fontweight='bold')
+        ax2.set_xlabel('Number of Repetitions')
+        ax2.set_ylabel('Unique Optimal Rankings Found')
         ax2.grid(True, alpha=0.3)
         
+        plt.tight_layout()
+        st.pyplot(fig)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"Graph: {H_gt.number_of_nodes()} nodes, {H_gt.number_of_edges()} edges | "
+                   f"Found {len(opt_gt)} optimal rankings | Min violations: {viol_gt}")
+        with col2:
+            st.info(f"Graph: {H_bias.number_of_nodes()} nodes, {H_bias.number_of_edges()} edges | "
+                   f"Found {len(opt_bias)} optimal rankings | Min violations: {viol_bias}")
+        
+        # Detailed Results - Ground Truth
+        st.markdown("---")
+        st.subheader("Detailed Analysis: Ground Truth Company")
+        
+        positions_gt = result_gt['positions']
+        stats_gt = {}
+        for job, pos_list in positions_gt.items():
+            stats_gt[job] = {
+                'mean': np.mean(pos_list),
+                'std': np.std(pos_list, ddof=1) if len(pos_list) > 1 else 0,
+                'var': np.var(pos_list, ddof=1) if len(pos_list) > 1 else 0,
+                'min': float(min(pos_list)),
+                'max': float(max(pos_list)),
+                'unique': len(set(pos_list))
+            }
+        stats_df_gt = pd.DataFrame(stats_gt).T.sort_values('mean')
+        jobs_sorted_gt = stats_df_gt.index.tolist()
+        
+        st.markdown("**Step 2: Job Position Variance**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            means = [stats_gt[j]['mean'] for j in jobs_sorted_gt]
+            stds = [stats_gt[j]['std'] for j in jobs_sorted_gt]
+            ax.barh(range(len(jobs_sorted_gt)), means, xerr=stds, capsize=5, alpha=0.7, color='steelblue')
+            ax.set_yticks(range(len(jobs_sorted_gt)))
+            ax.set_yticklabels(jobs_sorted_gt)
+            ax.set_xlabel('Average Rank (± Std Dev)')
+            ax.set_title('Average Ranking with Uncertainty', fontweight='bold')
+            ax.invert_yaxis()
+            ax.grid(axis='x', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+        
+        with col2:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            variances = [stats_gt[j]['var'] for j in jobs_sorted_gt]
+            colors = ['salmon' if v > np.median(variances) else 'lightgreen' for v in variances]
+            ax.barh(range(len(jobs_sorted_gt)), variances, alpha=0.7, color=colors)
+            ax.set_yticks(range(len(jobs_sorted_gt)))
+            ax.set_yticklabels(jobs_sorted_gt)
+            ax.set_xlabel('Position Variance')
+            ax.set_title('Job Position Variance', fontweight='bold')
+            ax.invert_yaxis()
+            ax.grid(axis='x', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+        
+        st.markdown("**Job Position Statistics**")
+        display_df_gt = stats_df_gt.copy()
+        display_df_gt.index.name = 'Job'
+        display_df_gt = display_df_gt.reset_index()
+        display_df_gt['mean'] = display_df_gt['mean'].apply(lambda x: f"{x:.2f}")
+        display_df_gt['std'] = display_df_gt['std'].apply(lambda x: f"{x:.2f}")
+        display_df_gt['var'] = display_df_gt['var'].apply(lambda x: f"{x:.2f}")
+        display_df_gt['min'] = display_df_gt['min'].apply(lambda x: f"{x:.1f}")
+        display_df_gt['max'] = display_df_gt['max'].apply(lambda x: f"{x:.1f}")
+        display_df_gt['unique'] = display_df_gt['unique'].apply(lambda x: f"{x:.1f}")
+        st.dataframe(display_df_gt, use_container_width=True, hide_index=True)
+        
+        st.markdown("**Step 3: K-means Clustering**")
+        st.info(f"Method: {kmeans_method} | Optimal K: {K_gt} | Threshold: {result_gt['threshold']:.4f}")
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        K_range = range(1, len(result_gt['Q_values']) + 1)
+        ax.plot(K_range, result_gt['Q_values'], 'bo-', linewidth=2)
+        ax.axhline(y=result_gt['threshold'], color='r', linestyle='--', linewidth=2,
+                  label=f"Threshold: {result_gt['threshold']:.2f}")
+        ax.axvline(x=K_gt, color='g', linestyle=':', linewidth=2, label=f"Optimal K={K_gt}")
+        ax.set_xlabel('K')
+        ax.set_ylabel('Q(K)')
+        ax.set_title(f'{kmeans_method}', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig)
+        
+        # Detailed Results - Biased Company
+        st.markdown("---")
+        st.subheader("Detailed Analysis: Biased Company")
+        
+        positions_bias = result_bias['positions']
+        stats_bias = {}
+        for job, pos_list in positions_bias.items():
+            stats_bias[job] = {
+                'mean': np.mean(pos_list),
+                'std': np.std(pos_list, ddof=1) if len(pos_list) > 1 else 0,
+                'var': np.var(pos_list, ddof=1) if len(pos_list) > 1 else 0,
+                'min': float(min(pos_list)),
+                'max': float(max(pos_list)),
+                'unique': len(set(pos_list))
+            }
+        stats_df_bias = pd.DataFrame(stats_bias).T.sort_values('mean')
+        jobs_sorted_bias = stats_df_bias.index.tolist()
+        
+        st.markdown("**Step 2: Job Position Variance**")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            means = [stats_bias[j]['mean'] for j in jobs_sorted_bias]
+            stds = [stats_bias[j]['std'] for j in jobs_sorted_bias]
+            ax.barh(range(len(jobs_sorted_bias)), means, xerr=stds, capsize=5, alpha=0.7, color='steelblue')
+            ax.set_yticks(range(len(jobs_sorted_bias)))
+            ax.set_yticklabels(jobs_sorted_bias)
+            ax.set_xlabel('Average Rank (± Std Dev)')
+            ax.set_title('Average Ranking with Uncertainty', fontweight='bold')
+            ax.invert_yaxis()
+            ax.grid(axis='x', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+        
+        with col2:
+            fig, ax = plt.subplots(figsize=(8, 6))
+            variances = [stats_bias[j]['var'] for j in jobs_sorted_bias]
+            colors = ['salmon' if v > np.median(variances) else 'lightgreen' for v in variances]
+            ax.barh(range(len(jobs_sorted_bias)), variances, alpha=0.7, color=colors)
+            ax.set_yticks(range(len(jobs_sorted_bias)))
+            ax.set_yticklabels(jobs_sorted_bias)
+            ax.set_xlabel('Position Variance')
+            ax.set_title('Job Position Variance', fontweight='bold')
+            ax.invert_yaxis()
+            ax.grid(axis='x', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+        
+        st.markdown("**Job Position Statistics**")
+        display_df_bias = stats_df_bias.copy()
+        display_df_bias.index.name = 'Job'
+        display_df_bias = display_df_bias.reset_index()
+        display_df_bias['mean'] = display_df_bias['mean'].apply(lambda x: f"{x:.2f}")
+        display_df_bias['std'] = display_df_bias['std'].apply(lambda x: f"{x:.2f}")
+        display_df_bias['var'] = display_df_bias['var'].apply(lambda x: f"{x:.2f}")
+        display_df_bias['min'] = display_df_bias['min'].apply(lambda x: f"{x:.1f}")
+        display_df_bias['max'] = display_df_bias['max'].apply(lambda x: f"{x:.1f}")
+        display_df_bias['unique'] = display_df_bias['unique'].apply(lambda x: f"{x:.1f}")
+        st.dataframe(display_df_bias, use_container_width=True, hide_index=True)
+        
+        st.markdown("**Step 3: K-means Clustering**")
+        st.info(f"Method: {kmeans_method} | Optimal K: {K_bias} | Threshold: {result_bias['threshold']:.4f}")
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        K_range = range(1, len(result_bias['Q_values']) + 1)
+        ax.plot(K_range, result_bias['Q_values'], 'bo-', linewidth=2)
+        ax.axhline(y=result_bias['threshold'], color='r', linestyle='--', linewidth=2,
+                  label=f"Threshold: {result_bias['threshold']:.2f}")
+        ax.axvline(x=K_bias, color='g', linestyle=':', linewidth=2, label=f"Optimal K={K_bias}")
+        ax.set_xlabel('K')
+        ax.set_ylabel('Q(K)')
+        ax.set_title(f'{kmeans_method}', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
