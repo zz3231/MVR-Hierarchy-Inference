@@ -430,94 +430,49 @@ elif page == "MVR Analysis":
         kmeans_bias = KMeans(n_clusters=K_bias, random_state=0, n_init=10)
         labels_bias = kmeans_bias.fit_predict(job_mean_ranks_bias)
         
-        # Create side-by-side cluster plots with horizontal bars grouped by layer
+        # Create side-by-side cluster plots
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 10))
         
         # Color palette for clusters
         colors = plt.cm.Set3(np.linspace(0, 1, max(K_gt, K_bias)))
         
-        # Ground Truth clusters - grouped by layer
-        job_data_gt = [(job, np.mean(positions_gt[job]), labels_gt[idx]) 
-                       for idx, job in enumerate(jobs_gt)]
-        job_data_gt.sort(key=lambda x: (x[2], x[1]))  # Sort by layer, then by rank
+        # Ground Truth: Sort by average rank (lower rank = higher position)
+        job_ranks_gt = [(job, np.mean(positions_gt[job]), labels_gt[idx]) 
+                        for idx, job in enumerate(jobs_gt)]
+        job_ranks_gt.sort(key=lambda x: x[1])  # Sort by average rank ascending
         
-        y_positions_gt = []
-        job_labels_gt = []
-        job_colors_gt = []
-        current_y = 0
+        jobs_sorted_gt = [j[0] for j in job_ranks_gt]
+        ranks_sorted_gt = [j[1] for j in job_ranks_gt]
+        colors_gt = [colors[j[2]] for j in job_ranks_gt]
         
-        for layer in range(K_gt):
-            layer_jobs = [j for j in job_data_gt if j[2] == layer]
-            if layer_jobs:
-                # Add layer separator
-                if current_y > 0:
-                    current_y += 0.5
-                for job, rank, lbl in layer_jobs:
-                    y_positions_gt.append(current_y)
-                    job_labels_gt.append(job)
-                    job_colors_gt.append(colors[lbl])
-                    current_y += 1
-        
-        ranks_gt = [np.mean(positions_gt[j]) for j in job_labels_gt]
-        ax1.barh(y_positions_gt, ranks_gt, color=job_colors_gt, alpha=0.7, 
+        y_pos_gt = range(len(jobs_sorted_gt))
+        ax1.barh(y_pos_gt, ranks_sorted_gt, color=colors_gt, alpha=0.8,
                 edgecolor='black', linewidth=1.5, height=0.8)
-        ax1.set_yticks(y_positions_gt)
-        ax1.set_yticklabels(job_labels_gt, fontsize=11, fontweight='bold')
+        ax1.set_yticks(y_pos_gt)
+        ax1.set_yticklabels(jobs_sorted_gt, fontsize=11, fontweight='bold')
         ax1.set_xlabel('Average Position in Ranking', fontsize=12, fontweight='bold')
         ax1.set_title(f'Ground Truth Company (K={K_gt})', fontsize=14, fontweight='bold')
         ax1.grid(axis='x', alpha=0.3)
-        ax1.invert_yaxis()
+        ax1.invert_yaxis()  # Higher ranks (lower values) at top
         
-        # Add layer labels on the left
-        for layer in range(K_gt):
-            layer_jobs = [(y, j) for y, j in zip(y_positions_gt, job_labels_gt) 
-                         if labels_gt[jobs_gt.index(j)] == layer]
-            if layer_jobs:
-                mid_y = np.mean([y for y, _ in layer_jobs])
-                ax1.text(-0.5, mid_y, f'Layer {layer}', fontsize=10, fontweight='bold',
-                        ha='right', va='center', 
-                        bbox=dict(boxstyle='round,pad=0.3', facecolor=colors[layer], alpha=0.5))
+        # Biased Company: Sort by average rank
+        job_ranks_bias = [(job, np.mean(positions_bias[job]), labels_bias[idx]) 
+                          for idx, job in enumerate(jobs_bias)]
+        job_ranks_bias.sort(key=lambda x: x[1])
         
-        # Biased Company clusters - grouped by layer
-        job_data_bias = [(job, np.mean(positions_bias[job]), labels_bias[idx]) 
-                         for idx, job in enumerate(jobs_bias)]
-        job_data_bias.sort(key=lambda x: (x[2], x[1]))
+        jobs_sorted_bias = [j[0] for j in job_ranks_bias]
+        ranks_sorted_bias = [j[1] for j in job_ranks_bias]
+        colors_bias = [colors[j[2]] for j in job_ranks_bias]
         
-        y_positions_bias = []
-        job_labels_bias = []
-        job_colors_bias = []
-        current_y = 0
-        
-        for layer in range(K_bias):
-            layer_jobs = [j for j in job_data_bias if j[2] == layer]
-            if layer_jobs:
-                if current_y > 0:
-                    current_y += 0.5
-                for job, rank, lbl in layer_jobs:
-                    y_positions_bias.append(current_y)
-                    job_labels_bias.append(job)
-                    job_colors_bias.append(colors[lbl])
-                    current_y += 1
-        
-        ranks_bias = [np.mean(positions_bias[j]) for j in job_labels_bias]
-        ax2.barh(y_positions_bias, ranks_bias, color=job_colors_bias, alpha=0.7,
+        y_pos_bias = range(len(jobs_sorted_bias))
+        ax2.barh(y_pos_bias, ranks_sorted_bias, color=colors_bias, alpha=0.8,
                 edgecolor='black', linewidth=1.5, height=0.8)
-        ax2.set_yticks(y_positions_bias)
-        ax2.set_yticklabels(job_labels_bias, fontsize=11, fontweight='bold')
+        ax2.set_yticks(y_pos_bias)
+        ax2.set_yticklabels(jobs_sorted_bias, fontsize=11, fontweight='bold')
         ax2.set_xlabel('Average Position in Ranking', fontsize=12, fontweight='bold')
         ax2.set_title(f'Biased Company (K={K_bias})', fontsize=14, fontweight='bold')
         ax2.grid(axis='x', alpha=0.3)
         ax2.invert_yaxis()
-        
-        # Add layer labels on the left
-        for layer in range(K_bias):
-            layer_jobs = [(y, j) for y, j in zip(y_positions_bias, job_labels_bias) 
-                         if labels_bias[jobs_bias.index(j)] == layer]
-            if layer_jobs:
-                mid_y = np.mean([y for y, _ in layer_jobs])
-                ax2.text(-0.5, mid_y, f'Layer {layer}', fontsize=10, fontweight='bold',
-                        ha='right', va='center',
-                        bbox=dict(boxstyle='round,pad=0.3', facecolor=colors[layer], alpha=0.5))
         
         plt.tight_layout()
         st.pyplot(fig)
