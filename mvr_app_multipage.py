@@ -218,6 +218,92 @@ elif page == "MVR Analysis":
         chosen_K = st.number_input("Choose K", 1, 20, 4)
     
     # Import MVR functions from original code
+    def build_bipartite_graph(panel_df):
+        """Build bipartite graph of workers and jobs"""
+        G = nx.Graph()
+        
+        for worker, group in panel_df.groupby('worker_id'):
+            path = group.sort_values('year')['role'].tolist()
+            
+            # Remove consecutive duplicates
+            path_unique = [path[0]]
+            for role in path[1:]:
+                if role != path_unique[-1]:
+                    path_unique.append(role)
+            
+            # Add worker node (bipartite=0) and job nodes (bipartite=1)
+            G.add_node(worker, bipartite=0)
+            for role in path_unique:
+                if role not in G:
+                    G.add_node(role, bipartite=1)
+                G.add_edge(worker, role)
+        
+        return G
+    
+    def prune_ilm_network(G, X=10):
+        """
+        Paper's leave-X-percent-out pruning procedure (Algorithm 1).
+        Removes articulation points (cut vertices) that when removed affect less than X% of jobs.
+        
+        Args:
+            G: Bipartite graph with worker (bipartite=0) and job (bipartite=1) nodes
+            X: Threshold percentage (default 10%)
+        
+        Returns:
+            Pruned graph G after removing problematic workers
+        """
+        # Get all job nodes
+        job_nodes = {n for n, d in G.nodes(data=True) if d.get('bipartite') == 1}
+        
+        # Compute degree for each job
+        job_degrees = {job: G.degree(job) for job in job_nodes}
+        
+        # Create G' where each link entering job v is duplicated 100/(d_v * X) times
+        # This effectively weights the importance of each link
+        G_prime = nx.Graph()
+        for u, v in G.edges():
+            G_prime.add_edge(u, v)
+            # If v is a job, duplicate this edge based on its degree
+            if v in job_nodes and job_degrees[v] > 0:
+                duplication_factor = int(np.ceil(100 / (job_degrees[v] * X)))
+                for _ in range(duplication_factor - 1):  # -1 because already added once
+                    G_prime.add_edge(u, v)
+        
+        # Copy node attributes
+        for node, data in G.nodes(data=True):
+            if node not in G_prime:
+                G_prime.add_node(node, **data)
+            else:
+                for key, value in data.items():
+                    G_prime.nodes[node][key] = value
+        
+        # Find articulation points in G'
+        articulation_points = set(nx.articulation_points(G_prime))
+        
+        # Filter to only worker articulation points
+        worker_nodes = {n for n, d in G.nodes(data=True) if d.get('bipartite') == 0}
+        workers_to_remove = articulation_points & worker_nodes
+        
+        # Remove these workers from original graph G
+        G_pruned = G.copy()
+        G_pruned.remove_nodes_from(workers_to_remove)
+        
+        return G_pruned
+    
+    def get_largest_connected_component(G):
+        """Get largest connected component from bipartite graph"""
+        if len(G.nodes()) == 0:
+            return nx.Graph()
+        
+        # Find all connected components
+        components = list(nx.connected_components(G))
+        
+        # Return subgraph of largest component
+        if components:
+            largest_component = max(components, key=len)
+            return G.subgraph(largest_component).copy()
+        return nx.Graph()
+    
     def build_directed_graph_all_pairs(panel_df):
         """Build directed graph H using ALL PAIRS method"""
         H = nx.DiGraph()
@@ -242,10 +328,13 @@ elif page == "MVR Analysis":
         return H
     
     def compute_violations_fast(H, ranking):
-        """Count violations efficiently"""
+        """
+        Count violations (paper method: unweighted).
+        A violation is an edge (u,v) where rank(u) > rank(v).
+        """
         rank_dict = {job: i for i, job in enumerate(ranking)}
         violations = sum(
-            H[u][v]['weight']
+            1  # Count edges, not weights (paper method)
             for u, v in H.edges()
             if rank_dict[u] > rank_dict[v]
         )
@@ -305,7 +394,7 @@ elif page == "MVR Analysis":
         return list(optimal_rankings), min_violations, progress
     
     def run_kmeans_bonhomme(optimal_rankings):
-        """Bonhomme method"""
+        """Bonhomme method with factorized layer numbering"""
         positions = defaultdict(list)
         for ranking in optimal_rankings:
             for pos, job in enumerate(ranking):
@@ -328,11 +417,26 @@ elif page == "MVR Analysis":
             
             Q_values.append(Q_K)
             if Q_K <= threshold:
-                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
-        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
+                # Factorize labels to get consecutive layer numbers (0, 1, 2, ...)
+                kmeans_final = KMeans(n_clusters=K, random_state=0, n_init=10)
+                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
+                labels = kmeans_final.fit_predict(job_mean_ranks)
+                
+                # Sort jobs by average rank and factorize labels
+                labels_sorted = [labels[jobs.index(j)] for j in jobs]
+                layer_ids = pd.factorize(labels_sorted)[0]
+                
+                # Map back to jobs
+                labels_factorized = {jobs[i]: layer_ids[i] for i in range(len(jobs))}
+                
+                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 
+                       'positions': positions, 'labels': labels_factorized}
+        
+        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 
+               'positions': positions, 'labels': {j: i for i, j in enumerate(jobs)}}
     
     def run_kmeans_overall_std(optimal_rankings):
-        """Overall Std (Average Optimal Ranking Variance) method"""
+        """Overall Std (Average Optimal Ranking Variance) method with factorized layer numbering"""
         positions = defaultdict(list)
         for ranking in optimal_rankings:
             for pos, job in enumerate(ranking):
@@ -357,19 +461,93 @@ elif page == "MVR Analysis":
             
             Q_values.append(Q_K)
             if Q_K <= threshold:
-                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
-        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 'positions': positions}
+                # Factorize labels to get consecutive layer numbers
+                kmeans_final = KMeans(n_clusters=K, random_state=0, n_init=10)
+                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
+                labels = kmeans_final.fit_predict(job_mean_ranks)
+                
+                # Sort jobs by average rank and factorize labels
+                labels_sorted = [labels[jobs.index(j)] for j in jobs]
+                layer_ids = pd.factorize(labels_sorted)[0]
+                
+                # Map back to jobs
+                labels_factorized = {jobs[i]: layer_ids[i] for i in range(len(jobs))}
+                
+                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 
+                       'positions': positions, 'labels': labels_factorized}
+        
+        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 
+               'positions': positions, 'labels': {j: i for i, j in enumerate(jobs)}}
     
     # Run analysis
+    # ILM Pruning Settings
+    st.subheader("3. ILM Network Pruning (Optional)")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        enable_pruning = st.checkbox("Enable ILM Pruning (Paper's Algorithm 1)", value=True,
+                                     help="Remove articulation points to address measurement error")
+    with col2:
+        X_threshold = st.slider("X% Threshold", min_value=5, max_value=20, value=10, step=5,
+                               help="Remove workers affecting less than X% of jobs")
+    
     if st.button("Run MVR Analysis on Both Companies", type="primary"):
         
-        # Run both companies
+        # Run both companies with ILM pruning if enabled
         with st.spinner("Running MVR on Ground Truth Company..."):
-            H_gt = build_directed_graph_all_pairs(st.session_state.ground_truth_df)
+            if enable_pruning:
+                # Step 1: Build bipartite graph
+                G_gt = build_bipartite_graph(st.session_state.ground_truth_df)
+                st.info(f"Ground Truth - Initial bipartite graph: {len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==1])} jobs, {len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==0])} workers")
+                
+                # Step 2: Prune network
+                G_gt_pruned = prune_ilm_network(G_gt, X=X_threshold)
+                workers_removed = len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==0]) - len([n for n, d in G_gt_pruned.nodes(data=True) if d.get('bipartite')==0])
+                st.info(f"Ground Truth - Removed {workers_removed} articulation point workers")
+                
+                # Step 3: Get largest connected component (largest ILM)
+                G_gt_ilm = get_largest_connected_component(G_gt_pruned)
+                jobs_in_ilm = len([n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==1])
+                st.info(f"Ground Truth - Largest ILM contains {jobs_in_ilm} jobs")
+                
+                # Step 4: Build directed graph from largest ILM
+                # Filter panel_df to only include workers and jobs in largest ILM
+                ilm_workers = {n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==0}
+                ilm_jobs = {n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==1}
+                panel_gt_filtered = st.session_state.ground_truth_df[
+                    (st.session_state.ground_truth_df['worker_id'].isin(ilm_workers)) &
+                    (st.session_state.ground_truth_df['role'].isin(ilm_jobs))
+                ]
+                H_gt = build_directed_graph_all_pairs(panel_gt_filtered)
+            else:
+                H_gt = build_directed_graph_all_pairs(st.session_state.ground_truth_df)
+            
             opt_gt, viol_gt, prog_gt = find_optimal_rankings_mvr(H_gt, R, T, early_stop)
         
         with st.spinner("Running MVR on Biased Company..."):
-            H_bias = build_directed_graph_all_pairs(st.session_state.biased_df)
+            if enable_pruning:
+                # Same steps for biased company
+                G_bias = build_bipartite_graph(st.session_state.biased_df)
+                st.info(f"Biased - Initial bipartite graph: {len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==1])} jobs, {len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==0])} workers")
+                
+                G_bias_pruned = prune_ilm_network(G_bias, X=X_threshold)
+                workers_removed = len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==0]) - len([n for n, d in G_bias_pruned.nodes(data=True) if d.get('bipartite')==0])
+                st.info(f"Biased - Removed {workers_removed} articulation point workers")
+                
+                G_bias_ilm = get_largest_connected_component(G_bias_pruned)
+                jobs_in_ilm = len([n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==1])
+                st.info(f"Biased - Largest ILM contains {jobs_in_ilm} jobs")
+                
+                ilm_workers = {n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==0}
+                ilm_jobs = {n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==1}
+                panel_bias_filtered = st.session_state.biased_df[
+                    (st.session_state.biased_df['worker_id'].isin(ilm_workers)) &
+                    (st.session_state.biased_df['role'].isin(ilm_jobs))
+                ]
+                H_bias = build_directed_graph_all_pairs(panel_bias_filtered)
+            else:
+                H_bias = build_directed_graph_all_pairs(st.session_state.biased_df)
+            
             opt_bias, viol_bias, prog_bias = find_optimal_rankings_mvr(H_bias, R, T, early_stop)
         
         # Run K-means
@@ -413,22 +591,14 @@ elif page == "MVR Analysis":
         # Job Cluster Visualization
         st.markdown("**Job Cluster Visualization**")
         
-        # Get positions and run K-means for clustering
+        # Get positions and labels from K-means results (already factorized)
         positions_gt = result_gt['positions']
         positions_bias = result_bias['positions']
+        labels_gt_dict = result_gt.get('labels', {})
+        labels_bias_dict = result_bias.get('labels', {})
         
         jobs_gt = sorted(positions_gt.keys(), key=lambda x: np.mean(positions_gt[x]))
         jobs_bias = sorted(positions_bias.keys(), key=lambda x: np.mean(positions_bias[x]))
-        
-        # Run K-means to get cluster assignments
-        job_mean_ranks_gt = np.array([np.mean(positions_gt[j]) for j in jobs_gt]).reshape(-1, 1)
-        job_mean_ranks_bias = np.array([np.mean(positions_bias[j]) for j in jobs_bias]).reshape(-1, 1)
-        
-        kmeans_gt = KMeans(n_clusters=K_gt, random_state=0, n_init=10)
-        labels_gt = kmeans_gt.fit_predict(job_mean_ranks_gt)
-        
-        kmeans_bias = KMeans(n_clusters=K_bias, random_state=0, n_init=10)
-        labels_bias = kmeans_bias.fit_predict(job_mean_ranks_bias)
         
         # Create side-by-side cluster plots
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 10))
@@ -437,13 +607,13 @@ elif page == "MVR Analysis":
         colors = plt.cm.Set3(np.linspace(0, 1, max(K_gt, K_bias)))
         
         # Ground Truth: Sort by average rank (lower rank = higher position)
-        job_ranks_gt = [(job, np.mean(positions_gt[job]), labels_gt[idx]) 
-                        for idx, job in enumerate(jobs_gt)]
+        job_ranks_gt = [(job, np.mean(positions_gt[job]), labels_gt_dict.get(job, 0)) 
+                        for job in jobs_gt]
         job_ranks_gt.sort(key=lambda x: x[1])  # Sort by average rank ascending
         
         jobs_sorted_gt = [j[0] for j in job_ranks_gt]
         ranks_sorted_gt = [j[1] for j in job_ranks_gt]
-        colors_gt = [colors[j[2]] for j in job_ranks_gt]
+        colors_gt = [colors[j[2] % len(colors)] for j in job_ranks_gt]
         
         y_pos_gt = range(len(jobs_sorted_gt))
         ax1.barh(y_pos_gt, ranks_sorted_gt, color=colors_gt, alpha=0.8,
@@ -456,13 +626,13 @@ elif page == "MVR Analysis":
         ax1.invert_yaxis()  # Higher ranks (lower values) at top
         
         # Biased Company: Sort by average rank
-        job_ranks_bias = [(job, np.mean(positions_bias[job]), labels_bias[idx]) 
-                          for idx, job in enumerate(jobs_bias)]
+        job_ranks_bias = [(job, np.mean(positions_bias[job]), labels_bias_dict.get(job, 0)) 
+                          for job in jobs_bias]
         job_ranks_bias.sort(key=lambda x: x[1])
         
         jobs_sorted_bias = [j[0] for j in job_ranks_bias]
         ranks_sorted_bias = [j[1] for j in job_ranks_bias]
-        colors_bias = [colors[j[2]] for j in job_ranks_bias]
+        colors_bias = [colors[j[2] % len(colors)] for j in job_ranks_bias]
         
         y_pos_bias = range(len(jobs_sorted_bias))
         ax2.barh(y_pos_bias, ranks_sorted_bias, color=colors_bias, alpha=0.8,

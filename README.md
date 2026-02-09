@@ -83,14 +83,33 @@ Four methods for determining optimal hierarchy levels (K):
 ## Algorithm Details
 
 ### MVR (Minimum Violation Ranking)
-- Random swap optimization algorithm
-- Minimizes edge violations in directed promotion graph
+- **Paper Method**: Unweighted violation counting (each edge counts as 1 violation)
+- Random swap optimization (MCMC algorithm)
+- Accepts swaps with S' ≤ S (equal or fewer violations)
 - Finds all global optimal rankings when multiple exist
+- Samples from the set of minimum violation rankings to create consensus ranking
+
+### ILM Network Pruning (Paper's Algorithm 1)
+- **Purpose**: Remove measurement error in occupational coding
+- **Method**: Leave-X-percent-out procedure (default X=10%)
+- Identifies articulation points (cut vertices) in bipartite worker-job graph
+- Removes workers whose removal affects less than X% of jobs
+- Extracts largest connected component as the main Internal Labor Market (ILM)
+- **Scale-invariant**: Same classification for firms with same structure but different sizes
 
 ### Graph Construction
-- ALL PAIRS method: connects all positions in worker trajectories
-- Consecutive duplicates removed (worker staying in same role)
-- Edge weights represent transition frequencies
+- **Step 1**: Build bipartite graph (workers ↔ jobs)
+- **Step 2**: Apply ILM pruning to remove measurement error
+- **Step 3**: Extract largest connected component (largest ILM)
+- **Step 4**: Build directed graph using ALL PAIRS method from largest ILM
+  - Connects all positions in each worker's career path
+  - Consecutive duplicates removed (worker staying in same role)
+  - Edge weights represent transition frequencies (but not used in violation counting)
+
+### K-means Clustering with Factorization
+- After MVR, jobs are grouped into K hierarchy levels
+- **Factorization**: Layer labels are renumbered to be consecutive (0, 1, 2, ...)
+- Ensures interpretable and consistent layer numbering across different runs
 
 ## Project Structure
 
