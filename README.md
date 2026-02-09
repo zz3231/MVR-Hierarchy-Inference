@@ -118,17 +118,6 @@ Three methods for determining optimal hierarchy levels (K):
 - **Factorization**: Layer labels are renumbered to be consecutive (0, 1, 2, ...)
 - Ensures interpretable and consistent layer numbering across different runs
 
-## Project Structure
-
-```
-corp/
-├── mvr_app_multipage.py    # Main Streamlit application
-├── firm_structure.py       # Synthetic company generation
-├── requirements.txt        # Python dependencies
-├── .gitignore             # Git ignore rules
-└── README.md              # This file
-```
-
 ## Reference
 
 Based on: Huitfeldt et al. (2023) - "Internal labor markets: A worker flow approach"
