@@ -67,17 +67,17 @@ Can MVR correctly identify organizational hierarchy levels when:
 Three methods for determining optimal hierarchy levels (K):
 
 1. **Average Optimal Ranking Variance** (Default)
-   - Threshold: `(N/(N-1)) × Var(average_ranks)`
+   - Threshold: `(N/(N-1)) x Var(average_ranks)`
    - Measures overall dispersion between job positions
    - More aggressive clustering (tends to produce larger K)
-   - Formula: `inertia ≤ (1/(N-1)) × Var(avg_ranks) × N`
+   - Formula: `inertia <= (1/(N-1)) x Var(avg_ranks) x N`
 
 2. **Bonhomme et al. (2019) - Paper Method**
-   - Threshold: `(N/(N-1)) × Σ Var(r_v)` where `Var(r_v)` is variance of job v's rank across optimal rankings
+   - Threshold: `(N/(N-1)) x Sum(Var(r_v))` where `Var(r_v)` is variance of job v's rank across optimal rankings
    - Measures within-job position uncertainty
    - More conservative clustering (tends to produce smaller K)
    - Exactly matches paper's Equation B2 (Appendix B.3)
-   - Formula: `inertia ≤ (1/(N-1)) × Σ Var(r_v) × N`
+   - Formula: `inertia <= (1/(N-1)) x Sum(Var(r_v)) x N`
 
 3. **Elbow Method (Manual)**
    - User manually selects K after viewing convergence and variance plots
@@ -92,7 +92,7 @@ Three methods for determining optimal hierarchy levels (K):
 ### MVR (Minimum Violation Ranking)
 - **Paper Method**: Unweighted violation counting (each edge counts as 1 violation)
 - Random swap optimization (MCMC algorithm)
-- Accepts swaps with S' ≤ S (equal or fewer violations)
+- Accepts swaps with S' <= S (equal or fewer violations)
 - Finds all global optimal rankings when multiple exist
 - Samples from the set of minimum violation rankings to create consensus ranking
 
@@ -105,7 +105,7 @@ Three methods for determining optimal hierarchy levels (K):
 - **Scale-invariant**: Same classification for firms with same structure but different sizes
 
 ### Graph Construction
-- **Step 1**: Build bipartite graph (workers ↔ jobs)
+- **Step 1**: Build bipartite graph (workers <-> jobs)
 - **Step 2**: Apply ILM pruning to remove measurement error
 - **Step 3**: Extract largest connected component (largest ILM)
 - **Step 4**: Build directed graph using ALL PAIRS method from largest ILM
