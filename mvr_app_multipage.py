@@ -210,10 +210,13 @@ elif page == "MVR Analysis":
     
     # K-means method
     kmeans_method = st.selectbox("K-means Method", 
-                                 ["Average Optimal Ranking Variance", "Bonhomme et al. (2019)", 
-                                  "Elbow (Manual)", "Simple Variance"],
-                                 index=0)
+                                 ["Average Optimal Ranking Variance (Default)", 
+                                  "Bonhomme et al. (2019) - Paper Method", 
+                                  "Elbow (Manual)"],
+                                 index=0,
+                                 help="Bonhomme method matches the paper exactly; Default is more intuitive")
     
+    chosen_K = None
     if kmeans_method == "Elbow (Manual)":
         chosen_K = st.number_input("Choose K", 1, 20, 4)
     
@@ -551,12 +554,40 @@ elif page == "MVR Analysis":
             opt_bias, viol_bias, prog_bias = find_optimal_rankings_mvr(H_bias, R, T, early_stop)
         
         # Run K-means
-        if kmeans_method == "Average Optimal Ranking Variance":
+        if kmeans_method.startswith("Average Optimal Ranking Variance"):
             result_gt = run_kmeans_overall_std(opt_gt)
             result_bias = run_kmeans_overall_std(opt_bias)
-        else:  # Bonhomme
+        elif kmeans_method.startswith("Bonhomme"):
             result_gt = run_kmeans_bonhomme(opt_gt)
             result_bias = run_kmeans_bonhomme(opt_bias)
+        else:  # Elbow (Manual)
+            # For manual K selection, we still need to get positions but override K
+            result_gt = run_kmeans_overall_std(opt_gt)
+            result_bias = run_kmeans_overall_std(opt_bias)
+            
+            # Override with user's chosen K and recompute labels
+            if chosen_K is not None:
+                # Recompute K-means with chosen K for ground truth
+                positions_gt = result_gt['positions']
+                jobs_gt = sorted(positions_gt.keys(), key=lambda x: np.mean(positions_gt[x]))
+                kmeans_gt = KMeans(n_clusters=chosen_K, random_state=0, n_init=10)
+                job_mean_ranks_gt = np.array([np.mean(positions_gt[j]) for j in jobs_gt]).reshape(-1, 1)
+                labels_gt = kmeans_gt.fit_predict(job_mean_ranks_gt)
+                labels_sorted_gt = [labels_gt[jobs_gt.index(j)] for j in jobs_gt]
+                layer_ids_gt = pd.factorize(labels_sorted_gt)[0]
+                result_gt['K'] = chosen_K
+                result_gt['labels'] = {jobs_gt[i]: layer_ids_gt[i] for i in range(len(jobs_gt))}
+                
+                # Same for biased
+                positions_bias = result_bias['positions']
+                jobs_bias = sorted(positions_bias.keys(), key=lambda x: np.mean(positions_bias[x]))
+                kmeans_bias = KMeans(n_clusters=chosen_K, random_state=0, n_init=10)
+                job_mean_ranks_bias = np.array([np.mean(positions_bias[j]) for j in jobs_bias]).reshape(-1, 1)
+                labels_bias = kmeans_bias.fit_predict(job_mean_ranks_bias)
+                labels_sorted_bias = [labels_bias[jobs_bias.index(j)] for j in jobs_bias]
+                layer_ids_bias = pd.factorize(labels_sorted_bias)[0]
+                result_bias['K'] = chosen_K
+                result_bias['labels'] = {jobs_bias[i]: layer_ids_bias[i] for i in range(len(jobs_bias))}
         
         K_gt = result_gt['K']
         K_bias = result_bias['K']

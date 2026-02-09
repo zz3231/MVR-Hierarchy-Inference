@@ -64,21 +64,28 @@ Can MVR correctly identify organizational hierarchy levels when:
 
 ## K-means Methods
 
-Four methods for determining optimal hierarchy levels (K):
+Three methods for determining optimal hierarchy levels (K):
 
 1. **Average Optimal Ranking Variance** (Default)
-   - Threshold: `(N/(N-1)) × var(average_ranks)`
+   - Threshold: `(N/(N-1)) × Var(average_ranks)`
    - Measures overall dispersion between job positions
+   - More aggressive clustering (tends to produce larger K)
+   - Formula: `inertia ≤ (1/(N-1)) × Var(avg_ranks) × N`
 
-2. **Bonhomme et al. (2019)**
-   - Threshold: `(N/(N-1)) × Σ(var_j)`
+2. **Bonhomme et al. (2019) - Paper Method**
+   - Threshold: `(N/(N-1)) × Σ Var(r_v)` where `Var(r_v)` is variance of job v's rank across optimal rankings
    - Measures within-job position uncertainty
+   - More conservative clustering (tends to produce smaller K)
+   - Exactly matches paper's Equation B2 (Appendix B.3)
+   - Formula: `inertia ≤ (1/(N-1)) × Σ Var(r_v) × N`
 
-3. **Elbow Method**
-   - Manual K selection after viewing elbow plot
+3. **Elbow Method (Manual)**
+   - User manually selects K after viewing convergence and variance plots
+   - Useful for exploratory analysis
 
-4. **Simple Variance Threshold**
-   - Fixed variance threshold for clustering
+**For Academic Publication**: Use Method #2 (Bonhomme) as it matches the paper exactly.
+
+**For Practical Use**: Method #1 provides more fine-grained hierarchies which may be useful for detailed analysis.
 
 ## Algorithm Details
 
