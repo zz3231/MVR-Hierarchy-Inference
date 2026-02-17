@@ -1199,15 +1199,24 @@ elif page == "Sensitivity Analysis":
         
         # TABLE 3: K Values and Violations
         st.subheader("Table 3: Identified K Values")
-        st.markdown("Number of hierarchy levels identified by K-means clustering.")
+        st.markdown("Number of hierarchy levels identified by K-means clustering, and layer assignment changes.")
         
         K_full = full_result['K']
+        full_labels = full_result.get('labels', {})
         
         k_data = []
         for result in config_results:
             K_identified = result.get('K', None)
             violations = result.get('violations', None)
             n_rankings = result.get('n_optimal_rankings', None)
+            labels = result.get('labels', {})
+            
+            # Count how many jobs have different layer assignments compared to full data
+            jobs_with_changed_layers = 0
+            if result['missing_job'] != 'None (Full Data)':
+                for job in full_labels:
+                    if job in labels and labels[job] != full_labels[job]:
+                        jobs_with_changed_layers += 1
             
             k_data.append({
                 'Scenario': result['missing_job'],
@@ -1215,6 +1224,7 @@ elif page == "Sensitivity Analysis":
                 'K_full': K_full,
                 'Correct': "YES" if K_identified == K_full else "NO",
                 'Delta': K_identified - K_full if K_identified is not None else "-",
+                'Jobs_Changed_Layer': jobs_with_changed_layers if result['missing_job'] != 'None (Full Data)' else 0,
                 'Violations': violations if violations is not None else "-",
                 'N_Optimal_Rankings': n_rankings if n_rankings is not None else "-"
             })
@@ -1250,9 +1260,94 @@ elif page == "Sensitivity Analysis":
         if critical_jobs:
             st.warning(f"**Critical jobs identified**: {', '.join(critical_jobs)}")
         
+        # TABLE 4: Layer Assignments
+        st.markdown("---")
+        st.subheader("Table 4: Layer Assignments")
+        st.markdown("""
+        **Rows**: Jobs (sorted by rank in full data)  
+        **Columns**: Scenarios (Full data, then each job missing ordered by rank)  
+        **Values**: Layer assignment (0 = bottom, K-1 = top)  
+        **Highlight**: Jobs with changed layer assignments compared to full data
+        """)
+        
+        # Build layer assignment table (transposed like Tables 1 & 2)
+        layer_data_transposed = []
+        for job in jobs_sorted_by_rank:
+            row = {'Job': job}
+            full_layer = full_labels.get(job, None)
+            
+            for scenario in scenario_order:
+                result = result_map.get(scenario)
+                if result:
+                    labels = result.get('labels', {})
+                    if job in labels:
+                        layer = labels[job]
+                        # Mark if different from full data (and not full data scenario)
+                        if scenario != 'None (Full Data)' and layer != full_layer:
+                            row[scenario] = f"{layer}*"
+                        else:
+                            row[scenario] = str(layer)
+                    else:
+                        row[scenario] = "-"
+                else:
+                    row[scenario] = "-"
+            layer_data_transposed.append(row)
+        
+        layer_df_transposed = pd.DataFrame(layer_data_transposed)
+        
+        # Styling: Highlight cells with changed layers (marked with *)
+        def highlight_changed_layers(s):
+            styles = []
+            for col in s.index:
+                if col == 'Job':
+                    styles.append('')
+                elif isinstance(s[col], str) and '*' in s[col]:
+                    styles.append('background-color: #ffffcc; font-weight: bold')
+                else:
+                    styles.append('')
+            return styles
+        
+        styled_layer_df = layer_df_transposed.style.apply(highlight_changed_layers, axis=1)
+        st.dataframe(styled_layer_df, use_container_width=True, height=500)
+        
+        st.caption("* = Layer changed compared to Full Data scenario")
+        
         # Visualizations
         st.markdown("---")
         st.subheader("Visualizations")
+        
+        # Visualization 0: Layer Changes Bar Chart (NEW)
+        st.markdown("**Number of Jobs with Changed Layer Assignments**")
+        
+        fig, ax = plt.subplots(figsize=(12, 5))
+        
+        scenarios_no_full = [item['Scenario'] for item in k_data if item['Scenario'] != 'None (Full Data)']
+        layer_changes = [item['Jobs_Changed_Layer'] for item in k_data if item['Scenario'] != 'None (Full Data)']
+        
+        x_pos = range(len(scenarios_no_full))
+        bars = ax.bar(x_pos, layer_changes, color='coral', alpha=0.7, edgecolor='black')
+        
+        # Highlight bars where K also changed
+        for i, scenario in enumerate(scenarios_no_full):
+            k_item = next((item for item in k_data if item['Scenario'] == scenario), None)
+            if k_item and k_item['Correct'] == 'NO':
+                bars[i].set_color('red')
+                bars[i].set_alpha(0.8)
+        
+        ax.set_xlabel('Missing Job (Ordered by Rank)', fontweight='bold')
+        ax.set_ylabel('Number of Jobs with Changed Layers', fontweight='bold')
+        ax.set_title(f'Layer Assignment Sensitivity ({selected_config})', fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(scenarios_no_full, rotation=45, ha='right')
+        ax.axhline(y=np.mean(layer_changes), color='gray', linestyle='--', alpha=0.5, label=f'Mean={np.mean(layer_changes):.1f}')
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
+        st.caption("Red bars indicate scenarios where K also changed from full data.")
         
         # Visualization 1: K Stability Plot
         st.markdown("**K Value by Missing Job**")
@@ -1427,6 +1522,7 @@ elif page == "Sensitivity Analysis":
                 rank_df_transposed.to_excel(writer, sheet_name='Average_Ranks', index=False)
                 std_df_transposed.to_excel(writer, sheet_name='Rank_StdDev', index=False)
                 k_df.to_excel(writer, sheet_name='K_Values', index=False)
+                layer_df_transposed.to_excel(writer, sheet_name='Layer_Assignments', index=False)
                 if len(config_names) > 1:
                     comparison_df.to_excel(writer, sheet_name='Config_Comparison', index=False)
             
