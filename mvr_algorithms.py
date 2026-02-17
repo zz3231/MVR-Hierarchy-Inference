@@ -317,6 +317,7 @@ def find_optimal_rankings_mvr(
     R: int, 
     T: int, 
     initial_ranking_method: str = "unweighted",
+    reset_each_rep: bool = True,
     seed: int = 42,
     progress_callback=None
 ) -> Tuple[List[Tuple[str]], int, List[int]]:
@@ -328,10 +329,11 @@ def find_optimal_rankings_mvr(
     Algorithm:
     1. Initialize with ranking sorted by out-degree
     2. For R repetitions:
-        a. For T iterations:
+        a. (Optional) Reset to initial ranking
+        b. For T iterations:
             - Randomly swap two jobs
             - Accept if violations <= current violations
-        b. Track optimal rankings with minimum violations
+        c. Track optimal rankings with minimum violations
     3. Return all optimal rankings
     
     Args:
@@ -339,6 +341,8 @@ def find_optimal_rankings_mvr(
         R: Number of repetitions (paper uses 3000)
         T: Number of iterations per repetition (paper uses 1500)
         initial_ranking_method: "unweighted" or "weighted"
+        reset_each_rep: If True, reset to initial ranking at start of each R (paper-exact).
+                        If False, continue from previous R's result (alternative).
         seed: Random seed for reproducibility
         progress_callback: Optional callback function(current_rep, total_reps)
     
@@ -369,9 +373,11 @@ def find_optimal_rankings_mvr(
     progress = []
     
     for r in range(R):
-        # Reset to initial ranking at the start of each repetition (paper-exact)
-        current_ranking = initial_ranking.copy()
-        current_violations = compute_violations(H, current_ranking)
+        # Reset to initial ranking if specified (paper-exact)
+        if reset_each_rep:
+            current_ranking = initial_ranking.copy()
+            current_violations = compute_violations(H, current_ranking)
+        # Otherwise continue from previous R's result (alternative)
         
         for t in range(T):
             # Random swap
@@ -590,6 +596,7 @@ def run_complete_mvr_pipeline(
     graph_method: str = "consecutive",
     ranking_method: str = "unweighted",
     threshold_method: str = "bonhomme_exact",
+    reset_each_rep: bool = True,
     R: int = 1000,
     T: int = 1000,
     seed: int = 42,
@@ -613,6 +620,7 @@ def run_complete_mvr_pipeline(
         graph_method: "consecutive" or "all_pairs"
         ranking_method: "unweighted" or "weighted"
         threshold_method: K-means threshold method
+        reset_each_rep: Reset to initial ranking at each R repetition (paper-exact: True)
         R: MVR repetitions
         T: MVR iterations
         seed: Random seed
@@ -665,6 +673,7 @@ def run_complete_mvr_pipeline(
     optimal_rankings, min_violations, progress = find_optimal_rankings_mvr(
         H, R, T, 
         initial_ranking_method=ranking_method,
+        reset_each_rep=reset_each_rep,
         seed=seed,
         progress_callback=progress_callback
     )

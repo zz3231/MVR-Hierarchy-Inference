@@ -291,13 +291,37 @@ elif page == "MVR Analysis":
     
     # MVR Parameters
     st.subheader("2. MVR Parameters")
-    col1, col2, col3 = st.columns(3)
+    
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         R = st.slider("R (Repetitions)", 100, 5000, 1000, 100)
     with col2:
         T = st.slider("T (Iterations)", 100, 3000, 1000, 100)
     with col3:
         seed = st.number_input("Random Seed", 0, 10000, 42)
+    with col4:
+        reset_each_rep = st.checkbox(
+            "Reset Each R", 
+            value=True,
+            help="Paper: Reset to initial ranking at each R repetition (independent searches). Alternative: Continue from previous R (cumulative search)."
+        )
+    
+    with st.expander("Understanding R Repetition Strategy"):
+        st.markdown("""
+        **Reset Each R (Paper Method, Default)**: ✅
+        - Each R repetition starts fresh from initial ranking
+        - R independent searches of solution space
+        - Better at finding multiple global optima
+        - Paper: "each time starting with the same initial ranking"
+        
+        **Continue from Previous R (Alternative)**:
+        - Each R repetition continues from where previous R ended
+        - One long cumulative search
+        - May converge faster to single optimum
+        - Explores fewer diverse solutions
+        
+        **Recommendation**: Use paper method (Reset=True) for standard analysis.
+        """)
     
     # ILM Pruning Settings
     st.subheader("3. ILM Network Pruning")
@@ -329,6 +353,7 @@ elif page == "MVR Analysis":
                     graph_method=graph_key,
                     ranking_method=ranking_key,
                     threshold_method=threshold_key,
+                    reset_each_rep=reset_each_rep,
                     R=R,
                     T=T,
                     seed=seed,
@@ -353,6 +378,7 @@ elif page == "MVR Analysis":
                     graph_method=graph_key,
                     ranking_method=ranking_key,
                     threshold_method=threshold_key,
+                    reset_each_rep=reset_each_rep,
                     R=R,
                     T=T,
                     seed=seed + 1,  # Different seed for biased
@@ -878,7 +904,7 @@ elif page == "Sensitivity Analysis":
     # MVR Parameters
     st.subheader("2. MVR Parameters")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         R = st.slider("R (Repetitions)", 100, 2000, 500, 100, key="sens_R")
     with col2:
@@ -886,6 +912,9 @@ elif page == "Sensitivity Analysis":
     with col3:
         seed = st.number_input("Random Seed", 0, 10000, 42, key="sens_seed")
     with col4:
+        reset_each_rep = st.checkbox("Reset Each R", value=True, key="sens_reset_each_rep",
+                                     help="Reset to initial ranking at each R (paper method)")
+    with col5:
         enable_cache = st.checkbox("Cache Results", value=True, help="Cache results to avoid re-computation")
     
     # ILM Pruning
@@ -918,6 +947,7 @@ elif page == "Sensitivity Analysis":
                         'threshold_method': threshold_method,
                         'enable_pruning': enable_pruning,
                         'X_threshold': X_threshold,
+                        'reset_each_rep': reset_each_rep,
                         'R': R,
                         'T': T,
                         'seed': seed
@@ -957,6 +987,7 @@ elif page == "Sensitivity Analysis":
                         graph_method=config['graph_method'],
                         ranking_method=config['ranking_method'],
                         threshold_method=config['threshold_method'],
+                        reset_each_rep=config['reset_each_rep'],
                         R=config['R'],
                         T=config['T'],
                         seed=config['seed']
@@ -1004,6 +1035,7 @@ elif page == "Sensitivity Analysis":
                             graph_method=config['graph_method'],
                             ranking_method=config['ranking_method'],
                             threshold_method=config['threshold_method'],
+                            reset_each_rep=config['reset_each_rep'],
                             R=config['R'],
                             T=config['T'],
                             seed=config['seed'] + job_idx + 1
