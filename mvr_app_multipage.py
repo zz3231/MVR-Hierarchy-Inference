@@ -1313,6 +1313,30 @@ elif page == "Sensitivity Analysis":
         if critical_jobs:
             st.warning(f"**Critical jobs identified**: {', '.join(critical_jobs)}")
         
+        # Check for scenarios with lost jobs (disconnected components)
+        scenarios_with_losses = [item for item in k_data if item.get('N_Jobs_Lost', 0) > 0]
+        if scenarios_with_losses:
+            st.error("**CONNECTIVITY WARNING: Some scenarios lost jobs due to graph disconnection!**")
+            st.markdown("""
+            When a job is removed, it can break the connectivity of the transition network.
+            Jobs in small disconnected components are excluded (only the largest component is analyzed).
+            """)
+            
+            loss_info = []
+            for item in scenarios_with_losses:
+                loss_info.append(f"- **{item['Scenario']}**: Lost {item['N_Jobs_Lost']} jobs (only {item['N_Jobs_Present']}/{len(all_jobs)} analyzed)")
+            
+            st.markdown("\n".join(loss_info))
+            
+            st.info("""
+            **Why does this happen?**
+            - The missing job may be the only connection between departments
+            - Without it, one department becomes an isolated component
+            - MVR only analyzes the largest connected component
+            
+            **Solution**: Enable ILM Pruning or use a denser transition network.
+            """)
+        
         # TABLE 4: Layer Assignments
         st.markdown("---")
         st.subheader("Table 4: Layer Assignments")
