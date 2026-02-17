@@ -1115,6 +1115,7 @@ elif page == "Sensitivity Analysis":
         
         # Get jobs sorted by average rank in full data
         full_positions = full_result.get('positions', {})
+        full_labels = full_result.get('labels', {})
         jobs_sorted_by_rank = sorted(full_positions.keys(), key=lambda x: np.mean(full_positions[x]))
         
         # Create scenario order: Full data first, then by missing job rank (low to high)
@@ -1168,7 +1169,7 @@ elif page == "Sensitivity Analysis":
         st.dataframe(styled_rank_df, use_container_width=True, height=500)
         
         # Show rank gaps analysis
-        with st.expander("📊 Rank Gap Analysis (Why does CEO stay in its own layer?)"):
+        with st.expander("Rank Gap Analysis (Why does CEO stay in its own layer?)"):
             st.markdown("""
             This analysis shows the **rank gap** between consecutive jobs in the hierarchy.
             Large gaps often result in separate layers in K-means clustering.
@@ -1213,7 +1214,7 @@ elif page == "Sensitivity Analysis":
             styled_gap_df = gap_df.style.apply(highlight_large_gaps, axis=1)
             st.dataframe(styled_gap_df, use_container_width=True)
             
-            st.caption("🔴 Red highlight = Large rank gap (>1.5), often indicates layer boundary")
+            st.caption("Red highlight = Large rank gap (>1.5), often indicates layer boundary")
             st.info(f"""
             **Observation**: If CEO has a large gap from the previous job, K-means will assign it to a separate top layer.
             This gap remains even when other jobs are missing, which is why CEO consistently stays in its own layer.
