@@ -51,18 +51,23 @@ if page == "Company Builder":
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        n_departments = st.number_input("Number of Departments", 1, 6, 3)
+        n_departments = st.number_input("Number of Departments", 1, 6, 2)
         
         departments = []
         st.markdown("**Department Configuration:**")
+        
+        # Define default configurations
+        default_names = ["Sales", "Engineering", "Finance", "Law", "Marketing", "HR"]
+        default_ranks = [6, 4, 5, 5, 5, 5]  # Sales: 6, Engineering: 4, others: 5
+        
         for i in range(n_departments):
             dept_col1, dept_col2 = st.columns([2, 1])
             with dept_col1:
                 dept_name = st.text_input(f"Dept {i+1} Name", 
-                                         value=["Sales", "Engineering", "Finance", "Law", "Marketing", "HR"][i],
+                                         value=default_names[i],
                                          key=f"dept_name_{i}")
             with dept_col2:
-                n_ranks = st.number_input(f"Ranks", 1, 10, 5, key=f"dept_ranks_{i}")
+                n_ranks = st.number_input(f"Ranks", 1, 10, default_ranks[i], key=f"dept_ranks_{i}")
             departments.append((dept_name, n_ranks))
     
     with col2:
