@@ -872,7 +872,9 @@ elif page == "Sensitivity Analysis":
         with col3:
             st.markdown("**K-means Threshold**")
             test_bonhomme_exact = st.checkbox("Bonhomme Exact (Paper)", value=True, key="sens_bonhomme_exact")
-            test_bonhomme_scaled = st.checkbox("Bonhomme Scaled", value=False, key="sens_bonhomme_scaled")
+            test_bonhomme_scaled = st.checkbox("Bonhomme Scaled (Alternative)", value=False, key="sens_bonhomme_scaled")
+            test_overall_exact = st.checkbox("Overall Variance Exact", value=False, key="sens_overall_exact")
+            test_overall_scaled = st.checkbox("Overall Variance Scaled", value=False, key="sens_overall_scaled")
         
         # Calculate total combinations
         graph_methods = []
@@ -892,6 +894,10 @@ elif page == "Sensitivity Analysis":
             threshold_methods.append("bonhomme_exact")
         if test_bonhomme_scaled:
             threshold_methods.append("bonhomme_scaled")
+        if test_overall_exact:
+            threshold_methods.append("overall_exact")
+        if test_overall_scaled:
+            threshold_methods.append("overall_scaled")
         
         n_configs = len(graph_methods) * len(ranking_methods) * len(threshold_methods)
         
