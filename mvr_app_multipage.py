@@ -308,7 +308,7 @@ elif page == "MVR Analysis":
     
     with st.expander("Understanding R Repetition Strategy"):
         st.markdown("""
-        **Reset Each R (Paper Method, Default)**: ✅
+        **Reset Each R (Paper Method, Default)**:
         - Each R repetition starts fresh from initial ranking
         - R independent searches of solution space
         - Better at finding multiple global optima
@@ -670,7 +670,7 @@ elif page == "MVR Analysis":
             **Key Difference**: 
             - Paper-exact (Bonhomme Exact) has NO N multiplication
             - Scaled versions multiply by N, increasing threshold
-            - Higher threshold → easier to satisfy Q(K) ≤ threshold → fewer clusters (smaller K)
+            - Higher threshold leads to easier satisfaction of Q(K) <= threshold, resulting in fewer clusters (smaller K)
             """)
         
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -1161,7 +1161,7 @@ elif page == "Sensitivity Analysis":
                 'Scenario': result['missing_job'],
                 'K_identified': K_identified if K_identified is not None else "Error",
                 'K_full': K_full,
-                'Correct': "✓" if K_identified == K_full else "✗",
+                'Correct': "YES" if K_identified == K_full else "NO",
                 'Delta': K_identified - K_full if K_identified is not None else "-",
                 'Violations': violations if violations is not None else "-",
                 'N_Optimal_Rankings': n_rankings if n_rankings is not None else "-"
@@ -1171,7 +1171,7 @@ elif page == "Sensitivity Analysis":
         
         # Highlight critical jobs (where K changes)
         def highlight_critical(row):
-            if row['Correct'] == "✗":
+            if row['Correct'] == "NO":
                 return ['background-color: #ffcccc'] * len(row)
             elif row['Scenario'] == 'None (Full Data)':
                 return ['background-color: #ccffcc'] * len(row)
@@ -1181,7 +1181,7 @@ elif page == "Sensitivity Analysis":
         st.dataframe(styled_k_df, use_container_width=True, height=400)
         
         # Summary metrics
-        n_correct = sum(1 for item in k_data[1:] if item['Correct'] == "✓")
+        n_correct = sum(1 for item in k_data[1:] if item['Correct'] == "YES")
         accuracy = n_correct / len(job_results) * 100 if job_results else 0
         
         col1, col2, col3 = st.columns(3)
@@ -1189,7 +1189,7 @@ elif page == "Sensitivity Analysis":
             st.metric("K Recovery Rate", f"{accuracy:.1f}%", 
                      help="Percentage of scenarios where K was correctly identified")
         with col2:
-            critical_jobs = [item['Scenario'] for item in k_data[1:] if item['Correct'] == "✗"]
+            critical_jobs = [item['Scenario'] for item in k_data[1:] if item['Correct'] == "NO"]
             st.metric("Critical Jobs", len(critical_jobs),
                      help="Jobs whose absence causes K to change")
         with col3:
@@ -1209,7 +1209,7 @@ elif page == "Sensitivity Analysis":
         
         scenarios = [item['Scenario'] for item in k_data]
         K_values = [item['K_identified'] if isinstance(item['K_identified'], (int, float)) else None for item in k_data]
-        colors = ['green' if item['Correct'] == "✓" else 'red' if item['Correct'] == "✗" else 'gray' for item in k_data]
+        colors = ['green' if item['Correct'] == "YES" else 'red' if item['Correct'] == "NO" else 'gray' for item in k_data]
         
         x_pos = range(len(scenarios))
         ax.scatter(x_pos, K_values, c=colors, s=100, alpha=0.6, edgecolors='black')
