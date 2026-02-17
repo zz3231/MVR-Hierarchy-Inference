@@ -15,6 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from firm_structure import FirmStructure, PromotionConfig, WorkerGenerator, ObservationBiasSimulator
+import mvr_algorithms as mvr
 
 st.set_page_config(
     page_title="MVR Hierarchy Inference",
@@ -35,7 +36,7 @@ if 'mvr_results' not in st.session_state:
 
 # Page navigation
 st.sidebar.title("MVR Hierarchy Inference")
-page = st.sidebar.radio("Navigate", ["Company Builder", "MVR Analysis"])
+page = st.sidebar.radio("Navigate", ["Company Builder", "MVR Analysis", "Sensitivity Analysis"])
 
 # ==================== PAGE 1: COMPANY BUILDER ====================
 
@@ -198,293 +199,103 @@ elif page == "MVR Analysis":
             f"Biased ({len(st.session_state.biased_df)} records, "
             f"{st.session_state.biased_df['worker_id'].nunique()} workers)")
     
+    # Algorithm Configuration
+    st.subheader("1. Algorithm Configuration")
+    
+    with st.expander("Configure Algorithm Variants (Paper-Exact vs Alternative)", expanded=True):
+        st.markdown("""
+        Choose between paper-exact implementations (Huitfeldt et al., 2023) and alternative variants.
+        
+        **Paper-Exact**: Strictly follows the published methodology.  
+        **Alternative**: Variants for robustness testing and comparison.
+        """)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Directed Graph Construction**")
+            graph_method = st.radio(
+                "Method",
+                ["Consecutive Pairs (Paper)", "All Pairs (Alternative)"],
+                index=0,
+                help="""
+                Consecutive: A->B->C creates edges A->B, B->C
+                All Pairs: A->B->C creates A->B, A->C, B->C
+                
+                Paper uses consecutive transitions only.
+                """,
+                key="graph_method"
+            )
+        
+        with col2:
+            st.markdown("**Initial Ranking**")
+            ranking_method = st.radio(
+                "Method",
+                ["Unweighted Out-Degree (Paper)", "Weighted Out-Degree (Alternative)"],
+                index=0,
+                help="""
+                Unweighted: Count number of outgoing edges
+                Weighted: Sum of edge weights (transition frequencies)
+                
+                Paper Algorithm 2 uses unweighted out-degree.
+                """,
+                key="ranking_method"
+            )
+        
+        with col3:
+            st.markdown("**K-means Threshold**")
+            threshold_method = st.radio(
+                "Method",
+                [
+                    "Bonhomme Exact (Paper)",
+                    "Bonhomme Scaled (Alternative)",
+                    "Overall Variance Exact",
+                    "Overall Variance Scaled"
+                ],
+                index=0,
+                help="""
+                Bonhomme Exact: threshold = sum(Var(r_v)) / (N-1) [PAPER]
+                Bonhomme Scaled: threshold = sum(Var(r_v)) * N / (N-1)
+                Overall Exact: threshold = Var(avg_ranks) / (N-1)
+                Overall Scaled: threshold = Var(avg_ranks) * N / (N-1)
+                
+                Paper Equation B2 uses Bonhomme Exact.
+                """,
+                key="threshold_method"
+            )
+        
+        # Convert display names to internal keys
+        graph_key = "consecutive" if "Consecutive" in graph_method else "all_pairs"
+        ranking_key = "unweighted" if "Unweighted" in ranking_method else "weighted"
+        
+        if "Bonhomme Exact" in threshold_method:
+            threshold_key = "bonhomme_exact"
+        elif "Bonhomme Scaled" in threshold_method:
+            threshold_key = "bonhomme_scaled"
+        elif "Overall Variance Exact" in threshold_method:
+            threshold_key = "overall_exact"
+        else:
+            threshold_key = "overall_scaled"
+        
+        st.info(f"""
+        **Current Configuration:**
+        - Graph: {graph_key}
+        - Initial Ranking: {ranking_key}
+        - K-means: {threshold_key}
+        """)
+    
     # MVR Parameters
-    st.subheader("MVR Parameters")
+    st.subheader("2. MVR Parameters")
     col1, col2, col3 = st.columns(3)
     with col1:
         R = st.slider("R (Repetitions)", 100, 5000, 1000, 100)
     with col2:
         T = st.slider("T (Iterations)", 100, 3000, 1000, 100)
     with col3:
-        early_stop = st.checkbox("Enable Early Stopping", False)
+        seed = st.number_input("Random Seed", 0, 10000, 42)
     
-    # K-means method
-    kmeans_method = st.selectbox("K-means Method", 
-                                 ["Average Optimal Ranking Variance (Default)", 
-                                  "Bonhomme et al. (2019) - Paper Method", 
-                                  "Elbow (Manual)"],
-                                 index=0,
-                                 help="Bonhomme method matches the paper exactly; Default is more intuitive")
-    
-    chosen_K = None
-    if kmeans_method == "Elbow (Manual)":
-        chosen_K = st.number_input("Choose K", 1, 20, 4)
-    
-    # Import MVR functions from original code
-    def build_bipartite_graph(panel_df):
-        """Build bipartite graph of workers and jobs"""
-        G = nx.Graph()
-        
-        for worker, group in panel_df.groupby('worker_id'):
-            path = group.sort_values('year')['role'].tolist()
-            
-            # Remove consecutive duplicates
-            path_unique = [path[0]]
-            for role in path[1:]:
-                if role != path_unique[-1]:
-                    path_unique.append(role)
-            
-            # Add worker node (bipartite=0) and job nodes (bipartite=1)
-            G.add_node(worker, bipartite=0)
-            for role in path_unique:
-                if role not in G:
-                    G.add_node(role, bipartite=1)
-                G.add_edge(worker, role)
-        
-        return G
-    
-    def prune_ilm_network(G, X=10):
-        """
-        Paper's leave-X-percent-out pruning procedure (Algorithm 1).
-        Removes articulation points (cut vertices) that when removed affect less than X% of jobs.
-        
-        Args:
-            G: Bipartite graph with worker (bipartite=0) and job (bipartite=1) nodes
-            X: Threshold percentage (default 10%)
-        
-        Returns:
-            Pruned graph G after removing problematic workers
-        """
-        # Get all job nodes
-        job_nodes = {n for n, d in G.nodes(data=True) if d.get('bipartite') == 1}
-        
-        # Compute degree for each job
-        job_degrees = {job: G.degree(job) for job in job_nodes}
-        
-        # Create G' where each link entering job v is duplicated 100/(d_v * X) times
-        # This effectively weights the importance of each link
-        G_prime = nx.Graph()
-        for u, v in G.edges():
-            G_prime.add_edge(u, v)
-            # If v is a job, duplicate this edge based on its degree
-            if v in job_nodes and job_degrees[v] > 0:
-                duplication_factor = int(np.ceil(100 / (job_degrees[v] * X)))
-                for _ in range(duplication_factor - 1):  # -1 because already added once
-                    G_prime.add_edge(u, v)
-        
-        # Copy node attributes
-        for node, data in G.nodes(data=True):
-            if node not in G_prime:
-                G_prime.add_node(node, **data)
-            else:
-                for key, value in data.items():
-                    G_prime.nodes[node][key] = value
-        
-        # Find articulation points in G'
-        articulation_points = set(nx.articulation_points(G_prime))
-        
-        # Filter to only worker articulation points
-        worker_nodes = {n for n, d in G.nodes(data=True) if d.get('bipartite') == 0}
-        workers_to_remove = articulation_points & worker_nodes
-        
-        # Remove these workers from original graph G
-        G_pruned = G.copy()
-        G_pruned.remove_nodes_from(workers_to_remove)
-        
-        return G_pruned
-    
-    def get_largest_connected_component(G):
-        """Get largest connected component from bipartite graph"""
-        if len(G.nodes()) == 0:
-            return nx.Graph()
-        
-        # Find all connected components
-        components = list(nx.connected_components(G))
-        
-        # Return subgraph of largest component
-        if components:
-            largest_component = max(components, key=len)
-            return G.subgraph(largest_component).copy()
-        return nx.Graph()
-    
-    def build_directed_graph_all_pairs(panel_df):
-        """Build directed graph H using ALL PAIRS method"""
-        H = nx.DiGraph()
-        
-        for worker, group in panel_df.groupby('worker_id'):
-            path = group.sort_values('year')['role'].tolist()
-            
-            # Remove consecutive duplicates (worker stays in same role)
-            path_unique = [path[0]]
-            for role in path[1:]:
-                if role != path_unique[-1]:
-                    path_unique.append(role)
-            
-            # Create ALL PAIRS edges
-            for i in range(len(path_unique)):
-                for j in range(i + 1, len(path_unique)):
-                    if H.has_edge(path_unique[i], path_unique[j]):
-                        H[path_unique[i]][path_unique[j]]['weight'] += 1
-                    else:
-                        H.add_edge(path_unique[i], path_unique[j], weight=1)
-        
-        return H
-    
-    def compute_violations_fast(H, ranking):
-        """
-        Count violations (paper method: unweighted).
-        A violation is an edge (u,v) where rank(u) > rank(v).
-        """
-        rank_dict = {job: i for i, job in enumerate(ranking)}
-        violations = sum(
-            1  # Count edges, not weights (paper method)
-            for u, v in H.edges()
-            if rank_dict[u] > rank_dict[v]
-        )
-        return violations
-    
-    def find_optimal_rankings_mvr(H, R, T, early_stop, seed=42):
-        """MVR algorithm"""
-        random.seed(seed)
-        np.random.seed(seed)
-        
-        jobs = list(H.nodes())
-        n = len(jobs)
-        jobs.sort(key=lambda x: H.out_degree(x, weight='weight'), reverse=True)
-        current_ranking = jobs.copy()
-        current_violations = compute_violations_fast(H, current_ranking)
-        
-        min_violations = current_violations
-        optimal_rankings = set()
-        optimal_rankings.add(tuple(current_ranking))
-        progress = []
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for r in range(R):
-            for t in range(T):
-                i, j = random.sample(range(n), 2)
-                new_ranking = current_ranking.copy()
-                new_ranking[i], new_ranking[j] = new_ranking[j], new_ranking[i]
-                new_violations = compute_violations_fast(H, new_ranking)
-                
-                if new_violations <= current_violations:
-                    current_ranking = new_ranking
-                    current_violations = new_violations
-                    
-                    if new_violations < min_violations:
-                        min_violations = new_violations
-                        optimal_rankings.clear()
-                        optimal_rankings.add(tuple(current_ranking))
-                    elif new_violations == min_violations:
-                        optimal_rankings.add(tuple(current_ranking))
-            
-            progress.append(len(optimal_rankings))
-            progress_bar.progress((r + 1) / R)
-            if (r + 1) % 100 == 0:
-                status_text.text(f"Rep {r + 1}/{R}: {len(optimal_rankings)} rankings")
-            
-            if early_stop and r >= 500:
-                if len(set(progress[-500:])) == 1:
-                    status_text.text(f"Early stop at R={r+1}")
-                    progress_bar.progress(1.0)
-                    break
-        
-        progress_bar.empty()
-        status_text.empty()
-        
-        return list(optimal_rankings), min_violations, progress
-    
-    def run_kmeans_bonhomme(optimal_rankings):
-        """Bonhomme method with factorized layer numbering"""
-        positions = defaultdict(list)
-        for ranking in optimal_rankings:
-            for pos, job in enumerate(ranking):
-                positions[job].append(pos)
-        
-        jobs = sorted(positions.keys(), key=lambda x: np.mean(positions[x]))
-        N = len(jobs)
-        sum_var = sum(np.var(positions[j], ddof=1) if len(positions[j]) > 1 else 0 for j in jobs)
-        threshold = (1 / (N - 1)) * sum_var * N
-        
-        Q_values = []
-        for K in range(1, N + 1):
-            if K == N:
-                Q_K = 0.0
-            else:
-                kmeans = KMeans(n_clusters=K, random_state=0, n_init=10)
-                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
-                kmeans.fit(job_mean_ranks)
-                Q_K = kmeans.inertia_
-            
-            Q_values.append(Q_K)
-            if Q_K <= threshold:
-                # Factorize labels to get consecutive layer numbers (0, 1, 2, ...)
-                kmeans_final = KMeans(n_clusters=K, random_state=0, n_init=10)
-                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
-                labels = kmeans_final.fit_predict(job_mean_ranks)
-                
-                # Sort jobs by average rank and factorize labels
-                labels_sorted = [labels[jobs.index(j)] for j in jobs]
-                layer_ids = pd.factorize(labels_sorted)[0]
-                
-                # Map back to jobs
-                labels_factorized = {jobs[i]: layer_ids[i] for i in range(len(jobs))}
-                
-                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 
-                       'positions': positions, 'labels': labels_factorized}
-        
-        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 
-               'positions': positions, 'labels': {j: i for i, j in enumerate(jobs)}}
-    
-    def run_kmeans_overall_std(optimal_rankings):
-        """Overall Std (Average Optimal Ranking Variance) method with factorized layer numbering"""
-        positions = defaultdict(list)
-        for ranking in optimal_rankings:
-            for pos, job in enumerate(ranking):
-                positions[job].append(pos)
-        
-        jobs = sorted(positions.keys(), key=lambda x: np.mean(positions[x]))
-        N = len(jobs)
-        
-        average_ranks = {job: np.mean(positions[job]) for job in jobs}
-        rank_var = np.var(list(average_ranks.values()))
-        threshold = (1 / (N - 1)) * rank_var * N
-        
-        Q_values = []
-        for K in range(1, N + 1):
-            if K == N:
-                Q_K = 0.0
-            else:
-                kmeans = KMeans(n_clusters=K, random_state=0, n_init=10)
-                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
-                kmeans.fit(job_mean_ranks)
-                Q_K = kmeans.inertia_
-            
-            Q_values.append(Q_K)
-            if Q_K <= threshold:
-                # Factorize labels to get consecutive layer numbers
-                kmeans_final = KMeans(n_clusters=K, random_state=0, n_init=10)
-                job_mean_ranks = np.array([np.mean(positions[j]) for j in jobs]).reshape(-1, 1)
-                labels = kmeans_final.fit_predict(job_mean_ranks)
-                
-                # Sort jobs by average rank and factorize labels
-                labels_sorted = [labels[jobs.index(j)] for j in jobs]
-                layer_ids = pd.factorize(labels_sorted)[0]
-                
-                # Map back to jobs
-                labels_factorized = {jobs[i]: layer_ids[i] for i in range(len(jobs))}
-                
-                return {'K': K, 'threshold': threshold, 'Q_values': Q_values, 
-                       'positions': positions, 'labels': labels_factorized}
-        
-        return {'K': N, 'threshold': threshold, 'Q_values': Q_values, 
-               'positions': positions, 'labels': {j: i for i, j in enumerate(jobs)}}
-    
-    # Run analysis
     # ILM Pruning Settings
-    st.subheader("3. ILM Network Pruning (Optional)")
+    st.subheader("3. ILM Network Pruning")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -496,110 +307,79 @@ elif page == "MVR Analysis":
     
     if st.button("Run MVR Analysis on Both Companies", type="primary"):
         
-        # Run both companies with ILM pruning if enabled
+        # Create progress callbacks
+        def progress_callback_gt(current, total):
+            pass  # Progress handled by streamlit progress bar
+        
+        def progress_callback_bias(current, total):
+            pass
+        
+        # Run Ground Truth Company
         with st.spinner("Running MVR on Ground Truth Company..."):
-            if enable_pruning:
-                # Step 1: Build bipartite graph
-                G_gt = build_bipartite_graph(st.session_state.ground_truth_df)
-                st.info(f"Ground Truth - Initial bipartite graph: {len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==1])} jobs, {len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==0])} workers")
+            try:
+                results_gt = mvr.run_complete_mvr_pipeline(
+                    panel_df=st.session_state.ground_truth_df,
+                    enable_ilm_pruning=enable_pruning,
+                    X_threshold=X_threshold,
+                    graph_method=graph_key,
+                    ranking_method=ranking_key,
+                    threshold_method=threshold_key,
+                    R=R,
+                    T=T,
+                    seed=seed,
+                    progress_callback=progress_callback_gt
+                )
                 
-                # Step 2: Prune network
-                G_gt_pruned = prune_ilm_network(G_gt, X=X_threshold)
-                workers_removed = len([n for n, d in G_gt.nodes(data=True) if d.get('bipartite')==0]) - len([n for n, d in G_gt_pruned.nodes(data=True) if d.get('bipartite')==0])
-                st.info(f"Ground Truth - Removed {workers_removed} articulation point workers")
-                
-                # Step 3: Get largest connected component (largest ILM)
-                G_gt_ilm = get_largest_connected_component(G_gt_pruned)
-                jobs_in_ilm = len([n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==1])
-                st.info(f"Ground Truth - Largest ILM contains {jobs_in_ilm} jobs")
-                
-                # Step 4: Build directed graph from largest ILM
-                # Filter panel_df to only include workers and jobs in largest ILM
-                ilm_workers = {n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==0}
-                ilm_jobs = {n for n, d in G_gt_ilm.nodes(data=True) if d.get('bipartite')==1}
-                panel_gt_filtered = st.session_state.ground_truth_df[
-                    (st.session_state.ground_truth_df['worker_id'].isin(ilm_workers)) &
-                    (st.session_state.ground_truth_df['role'].isin(ilm_jobs))
-                ]
-                H_gt = build_directed_graph_all_pairs(panel_gt_filtered)
-            else:
-                H_gt = build_directed_graph_all_pairs(st.session_state.ground_truth_df)
-            
-            opt_gt, viol_gt, prog_gt = find_optimal_rankings_mvr(H_gt, R, T, early_stop)
+                st.success(f"Ground Truth: {results_gt['directed_graph_nodes']} jobs, "
+                          f"{results_gt['directed_graph_edges']} edges, "
+                          f"{len(results_gt['optimal_rankings'])} optimal rankings, "
+                          f"{results_gt['min_violations']} violations")
+            except Exception as e:
+                st.error(f"Error in Ground Truth analysis: {str(e)}")
+                st.stop()
         
+        # Run Biased Company
         with st.spinner("Running MVR on Biased Company..."):
-            if enable_pruning:
-                # Same steps for biased company
-                G_bias = build_bipartite_graph(st.session_state.biased_df)
-                st.info(f"Biased - Initial bipartite graph: {len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==1])} jobs, {len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==0])} workers")
+            try:
+                results_bias = mvr.run_complete_mvr_pipeline(
+                    panel_df=st.session_state.biased_df,
+                    enable_ilm_pruning=enable_pruning,
+                    X_threshold=X_threshold,
+                    graph_method=graph_key,
+                    ranking_method=ranking_key,
+                    threshold_method=threshold_key,
+                    R=R,
+                    T=T,
+                    seed=seed + 1,  # Different seed for biased
+                    progress_callback=progress_callback_bias
+                )
                 
-                G_bias_pruned = prune_ilm_network(G_bias, X=X_threshold)
-                workers_removed = len([n for n, d in G_bias.nodes(data=True) if d.get('bipartite')==0]) - len([n for n, d in G_bias_pruned.nodes(data=True) if d.get('bipartite')==0])
-                st.info(f"Biased - Removed {workers_removed} articulation point workers")
-                
-                G_bias_ilm = get_largest_connected_component(G_bias_pruned)
-                jobs_in_ilm = len([n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==1])
-                st.info(f"Biased - Largest ILM contains {jobs_in_ilm} jobs")
-                
-                ilm_workers = {n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==0}
-                ilm_jobs = {n for n, d in G_bias_ilm.nodes(data=True) if d.get('bipartite')==1}
-                panel_bias_filtered = st.session_state.biased_df[
-                    (st.session_state.biased_df['worker_id'].isin(ilm_workers)) &
-                    (st.session_state.biased_df['role'].isin(ilm_jobs))
-                ]
-                H_bias = build_directed_graph_all_pairs(panel_bias_filtered)
-            else:
-                H_bias = build_directed_graph_all_pairs(st.session_state.biased_df)
-            
-            opt_bias, viol_bias, prog_bias = find_optimal_rankings_mvr(H_bias, R, T, early_stop)
+                st.success(f"Biased: {results_bias['directed_graph_nodes']} jobs, "
+                          f"{results_bias['directed_graph_edges']} edges, "
+                          f"{len(results_bias['optimal_rankings'])} optimal rankings, "
+                          f"{results_bias['min_violations']} violations")
+            except Exception as e:
+                st.error(f"Error in Biased analysis: {str(e)}")
+                st.stop()
         
-        # Run K-means
-        if kmeans_method.startswith("Average Optimal Ranking Variance"):
-            result_gt = run_kmeans_overall_std(opt_gt)
-            result_bias = run_kmeans_overall_std(opt_bias)
-        elif kmeans_method.startswith("Bonhomme"):
-            result_gt = run_kmeans_bonhomme(opt_gt)
-            result_bias = run_kmeans_bonhomme(opt_bias)
-        else:  # Elbow (Manual)
-            # For manual K selection, we still need to get positions but override K
-            result_gt = run_kmeans_overall_std(opt_gt)
-            result_bias = run_kmeans_overall_std(opt_bias)
-            
-            # Override with user's chosen K and recompute labels
-            if chosen_K is not None:
-                # Recompute K-means with chosen K for ground truth
-                positions_gt = result_gt['positions']
-                jobs_gt = sorted(positions_gt.keys(), key=lambda x: np.mean(positions_gt[x]))
-                kmeans_gt = KMeans(n_clusters=chosen_K, random_state=0, n_init=10)
-                job_mean_ranks_gt = np.array([np.mean(positions_gt[j]) for j in jobs_gt]).reshape(-1, 1)
-                labels_gt = kmeans_gt.fit_predict(job_mean_ranks_gt)
-                labels_sorted_gt = [labels_gt[jobs_gt.index(j)] for j in jobs_gt]
-                layer_ids_gt = pd.factorize(labels_sorted_gt)[0]
-                result_gt['K'] = chosen_K
-                result_gt['labels'] = {jobs_gt[i]: layer_ids_gt[i] for i in range(len(jobs_gt))}
-                
-                # Same for biased
-                positions_bias = result_bias['positions']
-                jobs_bias = sorted(positions_bias.keys(), key=lambda x: np.mean(positions_bias[x]))
-                kmeans_bias = KMeans(n_clusters=chosen_K, random_state=0, n_init=10)
-                job_mean_ranks_bias = np.array([np.mean(positions_bias[j]) for j in jobs_bias]).reshape(-1, 1)
-                labels_bias = kmeans_bias.fit_predict(job_mean_ranks_bias)
-                labels_sorted_bias = [labels_bias[jobs_bias.index(j)] for j in jobs_bias]
-                layer_ids_bias = pd.factorize(labels_sorted_bias)[0]
-                result_bias['K'] = chosen_K
-                result_bias['labels'] = {jobs_bias[i]: layer_ids_bias[i] for i in range(len(jobs_bias))}
+        K_gt = results_gt['K']
+        K_bias = results_bias['K']
         
-        K_gt = result_gt['K']
-        K_bias = result_bias['K']
-        
-        # Store results in session state for detailed view
+        # Store results in session state
         st.session_state.mvr_results = {
-            'H_gt': H_gt, 'H_bias': H_bias,
-            'opt_gt': opt_gt, 'opt_bias': opt_bias,
-            'viol_gt': viol_gt, 'viol_bias': viol_bias,
-            'prog_gt': prog_gt, 'prog_bias': prog_bias,
-            'result_gt': result_gt, 'result_bias': result_bias,
-            'K_gt': K_gt, 'K_bias': K_bias
+            'results_gt': results_gt,
+            'results_bias': results_bias,
+            'K_gt': K_gt,
+            'K_bias': K_bias,
+            'config': {
+                'graph_method': graph_key,
+                'ranking_method': ranking_key,
+                'threshold_method': threshold_key,
+                'enable_pruning': enable_pruning,
+                'X_threshold': X_threshold,
+                'R': R,
+                'T': T
+            }
         }
         
         # Display summary comparison
@@ -618,6 +398,18 @@ elif page == "MVR Analysis":
             st.success("Algorithm correctly identified the same number of layers despite selection bias.")
         else:
             st.warning(f"Algorithm identified different layer counts: GT={K_gt}, Biased={K_bias}")
+        
+        # Extract key objects for visualization
+        H_gt = results_gt['directed_graph']
+        H_bias = results_bias['directed_graph']
+        opt_gt = results_gt['optimal_rankings']
+        opt_bias = results_bias['optimal_rankings']
+        viol_gt = results_gt['min_violations']
+        viol_bias = results_bias['min_violations']
+        prog_gt = results_gt['progress']
+        prog_bias = results_bias['progress']
+        result_gt = {k: results_gt[k] for k in ['K', 'threshold', 'Q_values', 'positions', 'labels']}
+        result_bias = {k: results_bias[k] for k in ['K', 'threshold', 'Q_values', 'positions', 'labels']}
         
         # Job Cluster Visualization
         st.markdown("**Job Cluster Visualization**")
@@ -888,7 +680,7 @@ elif page == "MVR Analysis":
         st.dataframe(display_df_bias, use_container_width=True, hide_index=True)
         
         st.markdown("**Step 3: K-means Clustering**")
-        st.info(f"Method: {kmeans_method} | Optimal K: {K_bias} | Threshold: {result_bias['threshold']:.4f}")
+        st.info(f"Method: {threshold_key} | Optimal K: {K_bias} | Threshold: {result_bias['threshold']:.4f}")
         
         fig, ax = plt.subplots(figsize=(10, 5))
         K_range = range(1, len(result_bias['Q_values']) + 1)
@@ -898,12 +690,621 @@ elif page == "MVR Analysis":
         ax.axvline(x=K_bias, color='g', linestyle=':', linewidth=2, label=f"Optimal K={K_bias}")
         ax.set_xlabel('K')
         ax.set_ylabel('Q(K)')
-        ax.set_title(f'{kmeans_method}', fontweight='bold')
+        ax.set_title(f'{threshold_key}', fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
+        
+        # Algorithm Configuration Summary
+        st.markdown("---")
+        st.subheader("Algorithm Configuration Summary")
+        
+        config = st.session_state.mvr_results['config']
+        
+        config_df = pd.DataFrame([
+            {'Component': 'Directed Graph', 'Method': config['graph_method']},
+            {'Component': 'Initial Ranking', 'Method': config['ranking_method']},
+            {'Component': 'K-means Threshold', 'Method': config['threshold_method']},
+            {'Component': 'ILM Pruning', 'Method': f"{'Enabled' if config['enable_pruning'] else 'Disabled'} (X={config['X_threshold']}%)"},
+            {'Component': 'MVR Parameters', 'Method': f"R={config['R']}, T={config['T']}"}
+        ])
+        
+        st.dataframe(config_df, use_container_width=True, hide_index=True)
+        
+        # Pipeline Statistics
+        st.markdown("**Pipeline Statistics**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Ground Truth**")
+            stats_gt = pd.DataFrame([
+                {'Stage': 'Initial Graph', 'Value': f"{results_gt['initial_jobs']} jobs, {results_gt['initial_workers']} workers"},
+                {'Stage': 'Workers Removed', 'Value': f"{results_gt['workers_removed']}"},
+                {'Stage': 'Largest ILM', 'Value': f"{results_gt['largest_ilm_jobs']} jobs, {results_gt['largest_ilm_workers']} workers"},
+                {'Stage': 'Directed Graph', 'Value': f"{results_gt['directed_graph_nodes']} nodes, {results_gt['directed_graph_edges']} edges"},
+                {'Stage': 'Optimal Rankings', 'Value': f"{len(results_gt['optimal_rankings'])} rankings"},
+                {'Stage': 'Min Violations', 'Value': f"{results_gt['min_violations']}"},
+                {'Stage': 'Final K', 'Value': f"{K_gt}"}
+            ])
+            st.dataframe(stats_gt, use_container_width=True, hide_index=True)
+        
+        with col2:
+            st.markdown("**Biased Company**")
+            stats_bias = pd.DataFrame([
+                {'Stage': 'Initial Graph', 'Value': f"{results_bias['initial_jobs']} jobs, {results_bias['initial_workers']} workers"},
+                {'Stage': 'Workers Removed', 'Value': f"{results_bias['workers_removed']}"},
+                {'Stage': 'Largest ILM', 'Value': f"{results_bias['largest_ilm_jobs']} jobs, {results_bias['largest_ilm_workers']} workers"},
+                {'Stage': 'Directed Graph', 'Value': f"{results_bias['directed_graph_nodes']} nodes, {results_bias['directed_graph_edges']} edges"},
+                {'Stage': 'Optimal Rankings', 'Value': f"{len(results_bias['optimal_rankings'])} rankings"},
+                {'Stage': 'Min Violations', 'Value': f"{results_bias['min_violations']}"},
+                {'Stage': 'Final K', 'Value': f"{K_bias}"}
+            ])
+            st.dataframe(stats_bias, use_container_width=True, hide_index=True)
+
+# ==================== PAGE 3: SENSITIVITY ANALYSIS ====================
+
+elif page == "Sensitivity Analysis":
+    st.title("Sensitivity Analysis: Leave-One-Job-Out (LOJO)")
+    st.markdown("""
+    Analyze algorithm sensitivity by systematically removing each job and comparing results.
+    
+    This helps identify:
+    - Which jobs are critical for hierarchy identification
+    - How rank stability varies across jobs
+    - Robustness of different algorithm configurations
+    """)
+    
+    # Check prerequisites
+    if st.session_state.ground_truth_df is None:
+        st.warning("Please generate a Ground Truth company in Page 1 first.")
+        st.stop()
+    
+    if st.session_state.firm_structure is None:
+        st.warning("Please configure firm structure in Page 1 first.")
+        st.stop()
+    
+    # Display current company structure
+    st.info(f"Current Company: {len(st.session_state.ground_truth_df)} records, "
+            f"{st.session_state.ground_truth_df['worker_id'].nunique()} workers, "
+            f"{st.session_state.ground_truth_df['role'].nunique()} jobs")
+    
+    # Get all jobs
+    all_jobs = sorted(st.session_state.ground_truth_df['role'].unique())
+    n_jobs = len(all_jobs)
+    
+    st.markdown(f"**Total scenarios to test**: {n_jobs + 1} (Full data + {n_jobs} single-job-missing scenarios)")
+    
+    # Algorithm Configuration
+    st.subheader("1. Algorithm Configuration")
+    
+    with st.expander("Select Algorithm Variants to Compare", expanded=True):
+        st.markdown("""
+        Choose which algorithm configurations to test.
+        Each configuration will be tested on all scenarios.
+        """)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**Directed Graph**")
+            test_consecutive = st.checkbox("Consecutive Pairs (Paper)", value=True, key="sens_consecutive")
+            test_all_pairs = st.checkbox("All Pairs (Alternative)", value=True, key="sens_all_pairs")
+        
+        with col2:
+            st.markdown("**Initial Ranking**")
+            test_unweighted = st.checkbox("Unweighted Out-Degree (Paper)", value=True, key="sens_unweighted")
+            test_weighted = st.checkbox("Weighted Out-Degree (Alternative)", value=False, key="sens_weighted")
+        
+        with col3:
+            st.markdown("**K-means Threshold**")
+            test_bonhomme_exact = st.checkbox("Bonhomme Exact (Paper)", value=True, key="sens_bonhomme_exact")
+            test_bonhomme_scaled = st.checkbox("Bonhomme Scaled", value=False, key="sens_bonhomme_scaled")
+        
+        # Calculate total combinations
+        graph_methods = []
+        if test_consecutive:
+            graph_methods.append("consecutive")
+        if test_all_pairs:
+            graph_methods.append("all_pairs")
+        
+        ranking_methods = []
+        if test_unweighted:
+            ranking_methods.append("unweighted")
+        if test_weighted:
+            ranking_methods.append("weighted")
+        
+        threshold_methods = []
+        if test_bonhomme_exact:
+            threshold_methods.append("bonhomme_exact")
+        if test_bonhomme_scaled:
+            threshold_methods.append("bonhomme_scaled")
+        
+        n_configs = len(graph_methods) * len(ranking_methods) * len(threshold_methods)
+        
+        if n_configs == 0:
+            st.error("Please select at least one option from each category.")
+            st.stop()
+        
+        st.info(f"**Selected {n_configs} configuration(s)** to test on {n_jobs + 1} scenarios = **{n_configs * (n_jobs + 1)} total runs**")
+    
+    # MVR Parameters
+    st.subheader("2. MVR Parameters")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        R = st.slider("R (Repetitions)", 100, 2000, 500, 100, key="sens_R")
+    with col2:
+        T = st.slider("T (Iterations)", 100, 2000, 500, 100, key="sens_T")
+    with col3:
+        seed = st.number_input("Random Seed", 0, 10000, 42, key="sens_seed")
+    with col4:
+        enable_cache = st.checkbox("Cache Results", value=True, help="Cache results to avoid re-computation")
+    
+    # ILM Pruning
+    st.subheader("3. ILM Network Pruning")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        enable_pruning = st.checkbox("Enable ILM Pruning", value=False, key="sens_enable_pruning")
+    with col2:
+        if enable_pruning:
+            X_threshold = st.slider("X Threshold (%)", 5, 20, 10, 1, key="sens_X_threshold")
+        else:
+            X_threshold = 10
+    
+    # Initialize session state for caching
+    if 'sensitivity_cache' not in st.session_state:
+        st.session_state.sensitivity_cache = {}
+    
+    # Run Analysis Button
+    if st.button("Run Sensitivity Analysis", type="primary"):
+        
+        # Create all configurations
+        configs = []
+        for graph_method in graph_methods:
+            for ranking_method in ranking_methods:
+                for threshold_method in threshold_methods:
+                    configs.append({
+                        'graph_method': graph_method,
+                        'ranking_method': ranking_method,
+                        'threshold_method': threshold_method,
+                        'enable_pruning': enable_pruning,
+                        'X_threshold': X_threshold,
+                        'R': R,
+                        'T': T,
+                        'seed': seed
+                    })
+        
+        # Create cache key
+        cache_key = str(configs) + str(all_jobs)
+        
+        # Check cache
+        if enable_cache and cache_key in st.session_state.sensitivity_cache:
+            st.info("Loading cached results...")
+            all_results = st.session_state.sensitivity_cache[cache_key]
+        else:
+            # Run analysis
+            all_results = {}
+            
+            total_runs = len(configs) * (n_jobs + 1)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            current_run = 0
+            
+            for config_idx, config in enumerate(configs):
+                config_name = f"{config['graph_method']}_{config['ranking_method']}_{config['threshold_method']}"
+                
+                status_text.text(f"Testing configuration {config_idx + 1}/{len(configs)}: {config_name}")
+                
+                config_results = []
+                
+                # Scenario 0: Full data (no missing job)
+                status_text.text(f"Config {config_idx + 1}/{len(configs)}: Running full data scenario...")
+                
+                try:
+                    result_full = mvr.run_complete_mvr_pipeline(
+                        panel_df=st.session_state.ground_truth_df,
+                        enable_ilm_pruning=config['enable_pruning'],
+                        X_threshold=config['X_threshold'],
+                        graph_method=config['graph_method'],
+                        ranking_method=config['ranking_method'],
+                        threshold_method=config['threshold_method'],
+                        R=config['R'],
+                        T=config['T'],
+                        seed=config['seed']
+                    )
+                    
+                    config_results.append({
+                        'missing_job': 'None (Full Data)',
+                        'K': result_full['K'],
+                        'violations': result_full['min_violations'],
+                        'n_optimal_rankings': len(result_full['optimal_rankings']),
+                        'positions': result_full['positions'],
+                        'labels': result_full['labels'],
+                        'threshold': result_full['threshold']
+                    })
+                except Exception as e:
+                    st.error(f"Error in full data scenario: {str(e)}")
+                    config_results.append({
+                        'missing_job': 'None (Full Data)',
+                        'K': None,
+                        'violations': None,
+                        'n_optimal_rankings': None,
+                        'positions': {},
+                        'labels': {},
+                        'threshold': None,
+                        'error': str(e)
+                    })
+                
+                current_run += 1
+                progress_bar.progress(current_run / total_runs)
+                
+                # Scenarios 1-N: Each job missing
+                for job_idx, missing_job in enumerate(all_jobs):
+                    status_text.text(f"Config {config_idx + 1}/{len(configs)}: Testing without {missing_job} ({job_idx + 1}/{n_jobs})...")
+                    
+                    # Create scenario data (remove all records with this job)
+                    scenario_df = st.session_state.ground_truth_df[
+                        st.session_state.ground_truth_df['role'] != missing_job
+                    ].copy()
+                    
+                    try:
+                        result = mvr.run_complete_mvr_pipeline(
+                            panel_df=scenario_df,
+                            enable_ilm_pruning=config['enable_pruning'],
+                            X_threshold=config['X_threshold'],
+                            graph_method=config['graph_method'],
+                            ranking_method=config['ranking_method'],
+                            threshold_method=config['threshold_method'],
+                            R=config['R'],
+                            T=config['T'],
+                            seed=config['seed'] + job_idx + 1
+                        )
+                        
+                        config_results.append({
+                            'missing_job': missing_job,
+                            'K': result['K'],
+                            'violations': result['min_violations'],
+                            'n_optimal_rankings': len(result['optimal_rankings']),
+                            'positions': result['positions'],
+                            'labels': result['labels'],
+                            'threshold': result['threshold']
+                        })
+                    except Exception as e:
+                        st.error(f"Error with {missing_job} missing: {str(e)}")
+                        config_results.append({
+                            'missing_job': missing_job,
+                            'K': None,
+                            'violations': None,
+                            'n_optimal_rankings': None,
+                            'positions': {},
+                            'labels': {},
+                            'threshold': None,
+                            'error': str(e)
+                        })
+                    
+                    current_run += 1
+                    progress_bar.progress(current_run / total_runs)
+                
+                all_results[config_name] = config_results
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Cache results
+            if enable_cache:
+                st.session_state.sensitivity_cache[cache_key] = all_results
+            
+            st.success(f"Completed {total_runs} runs!")
+        
+        # Store results in session state
+        st.session_state.sensitivity_results = {
+            'all_results': all_results,
+            'all_jobs': all_jobs,
+            'configs': configs,
+            'config_names': list(all_results.keys())
+        }
+    
+    # Display Results
+    if 'sensitivity_results' in st.session_state:
+        st.markdown("---")
+        st.header("Results")
+        
+        results_data = st.session_state.sensitivity_results
+        all_results = results_data['all_results']
+        all_jobs = results_data['all_jobs']
+        config_names = results_data['config_names']
+        
+        # Configuration selector for detailed view
+        if len(config_names) > 1:
+            selected_config = st.selectbox("Select Configuration to View", config_names)
+        else:
+            selected_config = config_names[0]
+        
+        config_results = all_results[selected_config]
+        
+        # Extract data for this configuration
+        full_result = config_results[0]
+        job_results = config_results[1:]
+        
+        # TABLE 1: Optimal Average Ranks
+        st.subheader("Table 1: Optimal Average Ranks")
+        st.markdown("Average rank position of each job across all optimal rankings in each scenario.")
+        
+        rank_data = []
+        for result in config_results:
+            row = {'Scenario': result['missing_job']}
+            positions = result.get('positions', {})
+            for job in all_jobs:
+                if job in positions and len(positions[job]) > 0:
+                    row[job] = f"{np.mean(positions[job]):.2f}"
+                else:
+                    row[job] = "-"
+            rank_data.append(row)
+        
+        rank_df = pd.DataFrame(rank_data)
+        st.dataframe(rank_df, use_container_width=True, height=400)
+        
+        # TABLE 2: Rank Standard Deviation
+        st.subheader("Table 2: Rank Standard Deviation (Within Optimal Rankings)")
+        st.markdown("Standard deviation of rank position across optimal rankings for each job.")
+        
+        std_data = []
+        for result in config_results:
+            row = {'Scenario': result['missing_job']}
+            positions = result.get('positions', {})
+            for job in all_jobs:
+                if job in positions and len(positions[job]) > 1:
+                    row[job] = f"{np.std(positions[job], ddof=1):.3f}"
+                elif job in positions and len(positions[job]) == 1:
+                    row[job] = "0.000"
+                else:
+                    row[job] = "-"
+            std_data.append(row)
+        
+        std_df = pd.DataFrame(std_data)
+        st.dataframe(std_df, use_container_width=True, height=400)
+        
+        # TABLE 3: K Values and Violations
+        st.subheader("Table 3: Identified K Values")
+        st.markdown("Number of hierarchy levels identified by K-means clustering.")
+        
+        K_full = full_result['K']
+        
+        k_data = []
+        for result in config_results:
+            K_identified = result.get('K', None)
+            violations = result.get('violations', None)
+            n_rankings = result.get('n_optimal_rankings', None)
+            
+            k_data.append({
+                'Scenario': result['missing_job'],
+                'K_identified': K_identified if K_identified is not None else "Error",
+                'K_full': K_full,
+                'Correct': "✓" if K_identified == K_full else "✗",
+                'Delta': K_identified - K_full if K_identified is not None else "-",
+                'Violations': violations if violations is not None else "-",
+                'N_Optimal_Rankings': n_rankings if n_rankings is not None else "-"
+            })
+        
+        k_df = pd.DataFrame(k_data)
+        
+        # Highlight critical jobs (where K changes)
+        def highlight_critical(row):
+            if row['Correct'] == "✗":
+                return ['background-color: #ffcccc'] * len(row)
+            elif row['Scenario'] == 'None (Full Data)':
+                return ['background-color: #ccffcc'] * len(row)
+            return [''] * len(row)
+        
+        styled_k_df = k_df.style.apply(highlight_critical, axis=1)
+        st.dataframe(styled_k_df, use_container_width=True, height=400)
+        
+        # Summary metrics
+        n_correct = sum(1 for item in k_data[1:] if item['Correct'] == "✓")
+        accuracy = n_correct / len(job_results) * 100 if job_results else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("K Recovery Rate", f"{accuracy:.1f}%", 
+                     help="Percentage of scenarios where K was correctly identified")
+        with col2:
+            critical_jobs = [item['Scenario'] for item in k_data[1:] if item['Correct'] == "✗"]
+            st.metric("Critical Jobs", len(critical_jobs),
+                     help="Jobs whose absence causes K to change")
+        with col3:
+            st.metric("Full Data K", K_full)
+        
+        if critical_jobs:
+            st.warning(f"**Critical jobs identified**: {', '.join(critical_jobs)}")
+        
+        # Visualizations
+        st.markdown("---")
+        st.subheader("Visualizations")
+        
+        # Visualization 1: K Stability Plot
+        st.markdown("**K Value by Missing Job**")
+        
+        fig, ax = plt.subplots(figsize=(12, 5))
+        
+        scenarios = [item['Scenario'] for item in k_data]
+        K_values = [item['K_identified'] if isinstance(item['K_identified'], (int, float)) else None for item in k_data]
+        colors = ['green' if item['Correct'] == "✓" else 'red' if item['Correct'] == "✗" else 'gray' for item in k_data]
+        
+        x_pos = range(len(scenarios))
+        ax.scatter(x_pos, K_values, c=colors, s=100, alpha=0.6, edgecolors='black')
+        ax.axhline(y=K_full, color='blue', linestyle='--', linewidth=2, label=f'Full Data K={K_full}')
+        
+        ax.set_xlabel('Scenario', fontweight='bold')
+        ax.set_ylabel('Identified K', fontweight='bold')
+        ax.set_title(f'K Stability Across Scenarios ({selected_config})', fontweight='bold')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(scenarios, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
+        # Visualization 2: Rank Heatmap
+        st.markdown("**Rank Position Heatmap**")
+        st.markdown("Shows average rank of each job (columns) in each scenario (rows). Missing jobs shown as white.")
+        
+        # Create heatmap data
+        heatmap_data = np.zeros((len(config_results), len(all_jobs)))
+        heatmap_data[:] = np.nan
+        
+        for i, result in enumerate(config_results):
+            positions = result.get('positions', {})
+            for j, job in enumerate(all_jobs):
+                if job in positions and len(positions[job]) > 0:
+                    heatmap_data[i, j] = np.mean(positions[job])
+        
+        fig, ax = plt.subplots(figsize=(14, max(8, len(config_results) * 0.4)))
+        
+        im = ax.imshow(heatmap_data, cmap='RdYlGn_r', aspect='auto')
+        
+        ax.set_xticks(range(len(all_jobs)))
+        ax.set_xticklabels(all_jobs, rotation=45, ha='right')
+        ax.set_yticks(range(len(config_results)))
+        ax.set_yticklabels([r['missing_job'] for r in config_results])
+        
+        ax.set_xlabel('Job', fontweight='bold')
+        ax.set_ylabel('Scenario (Missing Job)', fontweight='bold')
+        ax.set_title(f'Average Rank Heatmap ({selected_config})', fontweight='bold')
+        
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Average Rank', rotation=270, labelpad=20)
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
+        # Visualization 3: Rank Stability (Std Dev) Bar Chart
+        st.markdown("**Rank Stability Analysis**")
+        st.markdown("Jobs with higher standard deviation have less stable rankings.")
+        
+        # Calculate average std across all scenarios for each job
+        job_std_avg = {}
+        for job in all_jobs:
+            stds = []
+            for result in config_results:
+                positions = result.get('positions', {})
+                if job in positions and len(positions[job]) > 1:
+                    stds.append(np.std(positions[job], ddof=1))
+            job_std_avg[job] = np.mean(stds) if stds else 0
+        
+        fig, ax = plt.subplots(figsize=(12, 5))
+        
+        jobs_sorted = sorted(job_std_avg.keys(), key=lambda x: job_std_avg[x], reverse=True)
+        stds_sorted = [job_std_avg[j] for j in jobs_sorted]
+        
+        bars = ax.bar(range(len(jobs_sorted)), stds_sorted, color='steelblue', alpha=0.7)
+        
+        # Highlight high-variance jobs
+        threshold_high = np.mean(stds_sorted) + np.std(stds_sorted)
+        for i, (job, std) in enumerate(zip(jobs_sorted, stds_sorted)):
+            if std > threshold_high:
+                bars[i].set_color('red')
+        
+        ax.set_xlabel('Job', fontweight='bold')
+        ax.set_ylabel('Average Rank Std Dev', fontweight='bold')
+        ax.set_title(f'Rank Stability by Job ({selected_config})', fontweight='bold')
+        ax.set_xticks(range(len(jobs_sorted)))
+        ax.set_xticklabels(jobs_sorted, rotation=45, ha='right')
+        ax.axhline(y=np.mean(stds_sorted), color='gray', linestyle='--', alpha=0.5, label='Mean')
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+        
+        # Configuration Comparison (if multiple configs tested)
+        if len(config_names) > 1:
+            st.markdown("---")
+            st.subheader("Configuration Comparison")
+            st.markdown("Compare K recovery rates and critical jobs across different algorithm configurations.")
+            
+            comparison_data = []
+            for config_name in config_names:
+                config_results = all_results[config_name]
+                full_K = config_results[0]['K']
+                job_results = config_results[1:]
+                
+                n_correct = sum(1 for r in job_results if r.get('K') == full_K)
+                accuracy = n_correct / len(job_results) * 100 if job_results else 0
+                critical_jobs = [r['missing_job'] for r in job_results if r.get('K') != full_K]
+                
+                comparison_data.append({
+                    'Configuration': config_name,
+                    'Full_Data_K': full_K,
+                    'K_Recovery_Rate': f"{accuracy:.1f}%",
+                    'Critical_Jobs_Count': len(critical_jobs),
+                    'Critical_Jobs': ', '.join(critical_jobs) if critical_jobs else 'None'
+                })
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True)
+            
+            # Bar chart comparing recovery rates
+            fig, ax = plt.subplots(figsize=(10, 5))
+            
+            configs = [item['Configuration'] for item in comparison_data]
+            rates = [float(item['K_Recovery_Rate'].rstrip('%')) for item in comparison_data]
+            
+            bars = ax.bar(range(len(configs)), rates, color='steelblue', alpha=0.7)
+            
+            # Color code by performance
+            for i, rate in enumerate(rates):
+                if rate >= 90:
+                    bars[i].set_color('green')
+                elif rate >= 70:
+                    bars[i].set_color('orange')
+                else:
+                    bars[i].set_color('red')
+            
+            ax.set_xlabel('Configuration', fontweight='bold')
+            ax.set_ylabel('K Recovery Rate (%)', fontweight='bold')
+            ax.set_title('Algorithm Robustness Comparison', fontweight='bold')
+            ax.set_xticks(range(len(configs)))
+            ax.set_xticklabels(configs, rotation=45, ha='right')
+            ax.set_ylim(0, 100)
+            ax.axhline(y=80, color='gray', linestyle='--', alpha=0.5, label='80% threshold')
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+        
+        # Export Results
+        st.markdown("---")
+        st.subheader("Export Results")
+        
+        if st.button("Export All Tables to CSV"):
+            import io
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                rank_df.to_excel(writer, sheet_name='Average_Ranks', index=False)
+                std_df.to_excel(writer, sheet_name='Rank_StdDev', index=False)
+                k_df.to_excel(writer, sheet_name='K_Values', index=False)
+                if len(config_names) > 1:
+                    comparison_df.to_excel(writer, sheet_name='Config_Comparison', index=False)
+            
+            buffer.seek(0)
+            
+            st.download_button(
+                label="Download Excel File",
+                data=buffer,
+                file_name=f"sensitivity_analysis_{selected_config}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 if __name__ == "__main__":
     pass
