@@ -607,7 +607,45 @@ elif page == "MVR Analysis":
         st.dataframe(display_df_gt, use_container_width=True, hide_index=True)
         
         st.markdown("**Step 3: K-means Clustering**")
-        st.info(f"Method: {kmeans_method} | Optimal K: {K_gt} | Threshold: {result_gt['threshold']:.4f}")
+        
+        # Create method description based on threshold_key
+        method_descriptions = {
+            "bonhomme_exact": "Bonhomme Exact (Paper)",
+            "bonhomme_scaled": "Bonhomme Scaled (Alternative)",
+            "overall_exact": "Overall Variance Exact",
+            "overall_scaled": "Overall Variance Scaled"
+        }
+        
+        method_name = method_descriptions.get(threshold_key, threshold_key)
+        st.info(f"Method: {method_name} | Optimal K: {K_gt} | Threshold: {result_gt['threshold']:.4f}")
+        
+        # Add explanation of the method
+        with st.expander("Understanding K-means Methods"):
+            st.markdown("""
+            **Bonhomme Exact (Paper Method)**:
+            - Formula: `threshold = sum(Var(r_v)) / (N-1)`
+            - Paper Reference: Appendix B.3, Equation B2
+            - Uses sum of individual job variances
+            - Tends to produce MORE layers (larger K)
+            
+            **Bonhomme Scaled (Alternative)**:
+            - Formula: `threshold = sum(Var(r_v)) * N / (N-1)`
+            - Multiplies by N (number of jobs)
+            - Tends to produce FEWER layers (smaller K)
+            
+            **Overall Variance Exact**:
+            - Uses variance of consensus ranks: `threshold = Var(avg_ranks) / (N-1)`
+            - Alternative method for comparison
+            
+            **Overall Variance Scaled**:
+            - Scaled version: `threshold = Var(avg_ranks) * N / (N-1)`
+            - Alternative method with N multiplication
+            
+            **Key Difference**: 
+            - Paper-exact (Bonhomme Exact) has NO N multiplication
+            - Scaled versions multiply by N, increasing threshold
+            - Higher threshold → easier to satisfy Q(K) ≤ threshold → fewer clusters (smaller K)
+            """)
         
         fig, ax = plt.subplots(figsize=(10, 5))
         K_range = range(1, len(result_gt['Q_values']) + 1)
@@ -617,11 +655,12 @@ elif page == "MVR Analysis":
         ax.axvline(x=K_gt, color='g', linestyle=':', linewidth=2, label=f"Optimal K={K_gt}")
         ax.set_xlabel('K')
         ax.set_ylabel('Q(K)')
-        ax.set_title(f'{kmeans_method}', fontweight='bold')
+        ax.set_title(f'{method_name}', fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig)
+        plt.close()
         
         # Detailed Results - Biased Company
         st.markdown("---")
@@ -685,7 +724,8 @@ elif page == "MVR Analysis":
         st.dataframe(display_df_bias, use_container_width=True, hide_index=True)
         
         st.markdown("**Step 3: K-means Clustering**")
-        st.info(f"Method: {threshold_key} | Optimal K: {K_bias} | Threshold: {result_bias['threshold']:.4f}")
+        method_name = method_descriptions.get(threshold_key, threshold_key)
+        st.info(f"Method: {method_name} | Optimal K: {K_bias} | Threshold: {result_bias['threshold']:.4f}")
         
         fig, ax = plt.subplots(figsize=(10, 5))
         K_range = range(1, len(result_bias['Q_values']) + 1)
@@ -695,7 +735,7 @@ elif page == "MVR Analysis":
         ax.axvline(x=K_bias, color='g', linestyle=':', linewidth=2, label=f"Optimal K={K_bias}")
         ax.set_xlabel('K')
         ax.set_ylabel('Q(K)')
-        ax.set_title(f'{threshold_key}', fontweight='bold')
+        ax.set_title(f'{method_name}', fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
