@@ -1113,43 +1113,89 @@ elif page == "Sensitivity Analysis":
         full_result = config_results[0]
         job_results = config_results[1:]
         
-        # TABLE 1: Optimal Average Ranks
+        # Get jobs sorted by average rank in full data
+        full_positions = full_result.get('positions', {})
+        jobs_sorted_by_rank = sorted(full_positions.keys(), key=lambda x: np.mean(full_positions[x]))
+        
+        # Create scenario order: Full data first, then by missing job rank (low to high)
+        scenario_order = ['None (Full Data)']
+        for job in jobs_sorted_by_rank:
+            scenario_order.append(job)
+        
+        # Create mapping from missing job to its result
+        result_map = {r['missing_job']: r for r in config_results}
+        
+        # TABLE 1: Optimal Average Ranks (TRANSPOSED)
         st.subheader("Table 1: Optimal Average Ranks")
-        st.markdown("Average rank position of each job across all optimal rankings in each scenario.")
+        st.markdown("""
+        **Rows**: Jobs (sorted by rank in full data, low to high)  
+        **Columns**: Scenarios (Full data, then each job missing ordered by rank)  
+        **Values**: Average rank position of each job in that scenario
+        """)
         
-        rank_data = []
-        for result in config_results:
-            row = {'Scenario': result['missing_job']}
-            positions = result.get('positions', {})
-            for job in all_jobs:
-                if job in positions and len(positions[job]) > 0:
-                    row[job] = f"{np.mean(positions[job]):.2f}"
+        # Build transposed table
+        rank_data_transposed = []
+        for job in jobs_sorted_by_rank:
+            row = {'Job': job}
+            for scenario in scenario_order:
+                result = result_map.get(scenario)
+                if result:
+                    positions = result.get('positions', {})
+                    if job in positions and len(positions[job]) > 0:
+                        row[scenario] = f"{np.mean(positions[job]):.2f}"
+                    else:
+                        row[scenario] = "-"
                 else:
-                    row[job] = "-"
-            rank_data.append(row)
+                    row[scenario] = "-"
+            rank_data_transposed.append(row)
         
-        rank_df = pd.DataFrame(rank_data)
-        st.dataframe(rank_df, use_container_width=True, height=400)
+        rank_df_transposed = pd.DataFrame(rank_data_transposed)
         
-        # TABLE 2: Rank Standard Deviation
+        # Styling: Highlight diagonal (missing job)
+        def highlight_missing(s):
+            styles = []
+            job_name = s['Job']
+            for col in s.index:
+                if col == 'Job':
+                    styles.append('')
+                elif col == job_name:
+                    styles.append('background-color: #ffeecc')
+                else:
+                    styles.append('')
+            return styles
+        
+        styled_rank_df = rank_df_transposed.style.apply(highlight_missing, axis=1)
+        st.dataframe(styled_rank_df, use_container_width=True, height=500)
+        
+        # TABLE 2: Rank Standard Deviation (TRANSPOSED)
         st.subheader("Table 2: Rank Standard Deviation (Within Optimal Rankings)")
-        st.markdown("Standard deviation of rank position across optimal rankings for each job.")
+        st.markdown("""
+        **Rows**: Jobs (sorted by rank in full data, low to high)  
+        **Columns**: Scenarios (Full data, then each job missing ordered by rank)  
+        **Values**: Standard deviation of rank position across optimal rankings
+        """)
         
-        std_data = []
-        for result in config_results:
-            row = {'Scenario': result['missing_job']}
-            positions = result.get('positions', {})
-            for job in all_jobs:
-                if job in positions and len(positions[job]) > 1:
-                    row[job] = f"{np.std(positions[job], ddof=1):.3f}"
-                elif job in positions and len(positions[job]) == 1:
-                    row[job] = "0.000"
+        # Build transposed std table
+        std_data_transposed = []
+        for job in jobs_sorted_by_rank:
+            row = {'Job': job}
+            for scenario in scenario_order:
+                result = result_map.get(scenario)
+                if result:
+                    positions = result.get('positions', {})
+                    if job in positions and len(positions[job]) > 1:
+                        row[scenario] = f"{np.std(positions[job], ddof=1):.3f}"
+                    elif job in positions and len(positions[job]) == 1:
+                        row[scenario] = "0.000"
+                    else:
+                        row[scenario] = "-"
                 else:
-                    row[job] = "-"
-            std_data.append(row)
+                    row[scenario] = "-"
+            std_data_transposed.append(row)
         
-        std_df = pd.DataFrame(std_data)
-        st.dataframe(std_df, use_container_width=True, height=400)
+        std_df_transposed = pd.DataFrame(std_data_transposed)
+        styled_std_df = std_df_transposed.style.apply(highlight_missing, axis=1)
+        st.dataframe(styled_std_df, use_container_width=True, height=500)
         
         # TABLE 3: K Values and Violations
         st.subheader("Table 3: Identified K Values")
@@ -1221,43 +1267,45 @@ elif page == "Sensitivity Analysis":
         ax.scatter(x_pos, K_values, c=colors, s=100, alpha=0.6, edgecolors='black')
         ax.axhline(y=K_full, color='blue', linestyle='--', linewidth=2, label=f'Full Data K={K_full}')
         
-        ax.set_xlabel('Scenario', fontweight='bold')
+        ax.set_xlabel('Scenario (Ordered by Missing Job Rank)', fontweight='bold')
         ax.set_ylabel('Identified K', fontweight='bold')
         ax.set_title(f'K Stability Across Scenarios ({selected_config})', fontweight='bold')
         ax.set_xticks(x_pos)
         ax.set_xticklabels(scenarios, rotation=45, ha='right')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, axis='y')
         
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
         
-        # Visualization 2: Rank Heatmap
+        # Visualization 2: Rank Heatmap (TRANSPOSED)
         st.markdown("**Rank Position Heatmap**")
-        st.markdown("Shows average rank of each job (columns) in each scenario (rows). Missing jobs shown as white.")
+        st.markdown("**Rows**: Jobs (sorted by rank) | **Columns**: Scenarios (ordered by missing job rank)")
         
-        # Create heatmap data
-        heatmap_data = np.zeros((len(config_results), len(all_jobs)))
+        # Create heatmap data: rows = jobs (sorted), columns = scenarios (ordered)
+        heatmap_data = np.zeros((len(jobs_sorted_by_rank), len(scenario_order)))
         heatmap_data[:] = np.nan
         
-        for i, result in enumerate(config_results):
-            positions = result.get('positions', {})
-            for j, job in enumerate(all_jobs):
-                if job in positions and len(positions[job]) > 0:
-                    heatmap_data[i, j] = np.mean(positions[job])
+        for i, job in enumerate(jobs_sorted_by_rank):
+            for j, scenario in enumerate(scenario_order):
+                result = result_map.get(scenario)
+                if result:
+                    positions = result.get('positions', {})
+                    if job in positions and len(positions[job]) > 0:
+                        heatmap_data[i, j] = np.mean(positions[job])
         
-        fig, ax = plt.subplots(figsize=(14, max(8, len(config_results) * 0.4)))
+        fig, ax = plt.subplots(figsize=(max(14, len(scenario_order) * 0.6), max(8, len(jobs_sorted_by_rank) * 0.4)))
         
         im = ax.imshow(heatmap_data, cmap='RdYlGn_r', aspect='auto')
         
-        ax.set_xticks(range(len(all_jobs)))
-        ax.set_xticklabels(all_jobs, rotation=45, ha='right')
-        ax.set_yticks(range(len(config_results)))
-        ax.set_yticklabels([r['missing_job'] for r in config_results])
+        ax.set_xticks(range(len(scenario_order)))
+        ax.set_xticklabels(scenario_order, rotation=45, ha='right')
+        ax.set_yticks(range(len(jobs_sorted_by_rank)))
+        ax.set_yticklabels(jobs_sorted_by_rank)
         
-        ax.set_xlabel('Job', fontweight='bold')
-        ax.set_ylabel('Scenario (Missing Job)', fontweight='bold')
+        ax.set_xlabel('Scenario (Ordered by Missing Job Rank)', fontweight='bold')
+        ax.set_ylabel('Job (Sorted by Rank)', fontweight='bold')
         ax.set_title(f'Average Rank Heatmap ({selected_config})', fontweight='bold')
         
         cbar = plt.colorbar(im, ax=ax)
@@ -1269,21 +1317,23 @@ elif page == "Sensitivity Analysis":
         
         # Visualization 3: Rank Stability (Std Dev) Bar Chart
         st.markdown("**Rank Stability Analysis**")
-        st.markdown("Jobs with higher standard deviation have less stable rankings.")
+        st.markdown("Jobs with higher standard deviation have less stable rankings across scenarios.")
         
         # Calculate average std across all scenarios for each job
         job_std_avg = {}
-        for job in all_jobs:
+        for job in jobs_sorted_by_rank:
             stds = []
-            for result in config_results:
-                positions = result.get('positions', {})
-                if job in positions and len(positions[job]) > 1:
-                    stds.append(np.std(positions[job], ddof=1))
+            for scenario in scenario_order:
+                result = result_map.get(scenario)
+                if result:
+                    positions = result.get('positions', {})
+                    if job in positions and len(positions[job]) > 1:
+                        stds.append(np.std(positions[job], ddof=1))
             job_std_avg[job] = np.mean(stds) if stds else 0
         
         fig, ax = plt.subplots(figsize=(12, 5))
         
-        jobs_sorted = sorted(job_std_avg.keys(), key=lambda x: job_std_avg[x], reverse=True)
+        jobs_sorted = jobs_sorted_by_rank
         stds_sorted = [job_std_avg[j] for j in jobs_sorted]
         
         bars = ax.bar(range(len(jobs_sorted)), stds_sorted, color='steelblue', alpha=0.7)
@@ -1369,13 +1419,13 @@ elif page == "Sensitivity Analysis":
         st.markdown("---")
         st.subheader("Export Results")
         
-        if st.button("Export All Tables to CSV"):
+        if st.button("Export All Tables to Excel"):
             import io
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                rank_df.to_excel(writer, sheet_name='Average_Ranks', index=False)
-                std_df.to_excel(writer, sheet_name='Rank_StdDev', index=False)
+                rank_df_transposed.to_excel(writer, sheet_name='Average_Ranks', index=False)
+                std_df_transposed.to_excel(writer, sheet_name='Rank_StdDev', index=False)
                 k_df.to_excel(writer, sheet_name='K_Values', index=False)
                 if len(config_names) > 1:
                     comparison_df.to_excel(writer, sheet_name='Config_Comparison', index=False)
