@@ -1167,6 +1167,58 @@ elif page == "Sensitivity Analysis":
         styled_rank_df = rank_df_transposed.style.apply(highlight_missing, axis=1)
         st.dataframe(styled_rank_df, use_container_width=True, height=500)
         
+        # Show rank gaps analysis
+        with st.expander("📊 Rank Gap Analysis (Why does CEO stay in its own layer?)"):
+            st.markdown("""
+            This analysis shows the **rank gap** between consecutive jobs in the hierarchy.
+            Large gaps often result in separate layers in K-means clustering.
+            """)
+            
+            # Calculate rank gaps for Full Data scenario
+            full_positions = full_result.get('positions', {})
+            full_avg_ranks = {job: np.mean(full_positions[job]) for job in jobs_sorted_by_rank if job in full_positions}
+            
+            gap_data = []
+            for i in range(len(jobs_sorted_by_rank) - 1):
+                job_current = jobs_sorted_by_rank[i]
+                job_next = jobs_sorted_by_rank[i + 1]
+                
+                if job_current in full_avg_ranks and job_next in full_avg_ranks:
+                    rank_current = full_avg_ranks[job_current]
+                    rank_next = full_avg_ranks[job_next]
+                    gap = rank_next - rank_current
+                    
+                    gap_data.append({
+                        'From': job_current,
+                        'To': job_next,
+                        'Rank_From': f"{rank_current:.2f}",
+                        'Rank_To': f"{rank_next:.2f}",
+                        'Gap': f"{gap:.2f}",
+                        'Layer_From': full_labels.get(job_current, '-'),
+                        'Layer_To': full_labels.get(job_next, '-')
+                    })
+            
+            gap_df = pd.DataFrame(gap_data)
+            
+            # Highlight large gaps (potential layer boundaries)
+            def highlight_large_gaps(row):
+                try:
+                    gap = float(row['Gap'])
+                    if gap > 1.5:  # Threshold for "large gap"
+                        return ['background-color: #ffcccc'] * len(row)
+                except:
+                    pass
+                return [''] * len(row)
+            
+            styled_gap_df = gap_df.style.apply(highlight_large_gaps, axis=1)
+            st.dataframe(styled_gap_df, use_container_width=True)
+            
+            st.caption("🔴 Red highlight = Large rank gap (>1.5), often indicates layer boundary")
+            st.info(f"""
+            **Observation**: If CEO has a large gap from the previous job, K-means will assign it to a separate top layer.
+            This gap remains even when other jobs are missing, which is why CEO consistently stays in its own layer.
+            """)
+        
         # TABLE 2: Rank Standard Deviation (TRANSPOSED)
         st.subheader("Table 2: Rank Standard Deviation (Within Optimal Rankings)")
         st.markdown("""
