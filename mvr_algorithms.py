@@ -369,6 +369,10 @@ def find_optimal_rankings_mvr(
     progress = []
     
     for r in range(R):
+        # Reset to initial ranking at the start of each repetition (paper-exact)
+        current_ranking = initial_ranking.copy()
+        current_violations = compute_violations(H, current_ranking)
+        
         for t in range(T):
             # Random swap
             i, j = random.sample(range(n), 2)
