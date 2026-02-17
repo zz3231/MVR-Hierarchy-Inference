@@ -30,3 +30,6 @@ Thumbs.db
 # Logs
 *.log
 *.tmp
+
+# Local documentation (keep locally, don't push to GitHub)
+docs/
